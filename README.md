@@ -48,6 +48,22 @@ Docker Compose использует явное имя проекта `gorodskoy`
 
 16.06.2026 Docker Desktop установлен и приемочная проверка задачи 1 выполнена: `docker compose up -d --build` поднимает приложение, `/`, `/health` и `/admin` отвечают `200`, `docker compose run --rm app pytest` проходит.
 
+## Автозапуск в Windows
+
+Для автозапуска через Планировщик заданий Windows используйте фоновый запуск из актуальной рабочей папки:
+
+```powershell
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath 'C:\Projects\gorodskoy'; docker compose up -d --build"
+```
+
+Команда предполагает, что Docker Desktop уже установлен и запущен. После запуска приложение доступно на `http://localhost:8000`.
+
+Команда остановки:
+
+```powershell
+C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location -LiteralPath 'C:\Projects\gorodskoy'; docker compose down"
+```
+
 ## Конфигурация
 
 Пример переменных окружения лежит в `.env.example`. Для локальной разработки по умолчанию используются:
