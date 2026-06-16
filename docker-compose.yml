@@ -1,0 +1,14 @@
+name: gorodskoy
+
+services:
+  app:
+    build: .
+    env_file:
+      - .env.example
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./imports:/app/imports
+      - ./exports:/app/exports
+      - ./logs:/app/logs
