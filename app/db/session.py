@@ -4,6 +4,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy import event
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
 
@@ -11,7 +12,10 @@ from app.core.config import get_settings
 def create_database_engine(database_url: str | None = None):
     url = database_url or get_settings().database_url
     connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-    database_engine = create_engine(url, connect_args=connect_args, future=True)
+    engine_kwargs = {"connect_args": connect_args, "future": True}
+    if url in {"sqlite:///:memory:", "sqlite://"}:
+        engine_kwargs["poolclass"] = StaticPool
+    database_engine = create_engine(url, **engine_kwargs)
     if url.startswith("sqlite"):
         _enable_sqlite_foreign_keys(database_engine)
     return database_engine

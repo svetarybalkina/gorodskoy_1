@@ -1,0 +1,22 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Вход{% endblock %}
+
+{% block content %}
+<section class="admin-login">
+    <h1>Вход в админку</h1>
+    <p class="muted">Доступ открыт только для администратора проекта.</p>
+    {% if error %}
+        <div class="notice" role="alert">{{ error }}</div>
+    {% endif %}
+    <form action="/admin/login" method="post" class="admin-form">
+        <label for="username">Логин</label>
+        <input id="username" name="username" type="text" autocomplete="username" required>
+
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+        <button type="submit">Войти</button>
+    </form>
+</section>
+{% endblock %}

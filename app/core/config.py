@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     service_name: str = Field(default="Городской справочник", alias="SERVICE_NAME")
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
     ads_enabled: bool = Field(default=False, alias="ADS_ENABLED")
+    auto_db_bootstrap: bool = Field(default=True, alias="AUTO_DB_BOOTSTRAP")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

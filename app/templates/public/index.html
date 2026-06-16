@@ -1,0 +1,52 @@
+{% extends "public/base.html" %}
+
+{% block title %}{{ service_name }}{% endblock %}
+
+{% block content %}
+<section class="intro">
+    <div class="intro-text">
+        <p class="eyebrow">Информационно-поисковый сервис справочного характера</p>
+        <h1>Поиск опубликованных ответов по ЖКХ и теме животных</h1>
+        <p class="lead">Задайте вопрос или выберите категорию. Сервис подберет официально опубликованные материалы по смысловому сходству с вашим запросом.</p>
+    </div>
+    <form class="search-form" action="/search" method="get">
+        <label for="q">Поиск</label>
+        <div class="search-row">
+            <input id="q" name="q" type="search" placeholder="Задайте вопрос по ЖКХ или теме животных">
+            <button type="submit">Найти</button>
+        </div>
+    </form>
+</section>
+
+<section class="section">
+    <h2>Категории</h2>
+    <div class="topic-grid">
+        {% for topic in topics %}
+            <section class="topic-block" aria-labelledby="topic-{{ topic.slug }}">
+                <h3 id="topic-{{ topic.slug }}">{{ topic.name }}</h3>
+                <div class="category-list">
+                    {% for category in topic.categories|sort(attribute="sort_order") %}
+                        {% if category.is_public and category.is_confirmed %}
+                            <a href="/search?category_id={{ category.id }}">{{ category.name }}</a>
+                        {% endif %}
+                    {% endfor %}
+                </div>
+            </section>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="section">
+    <h2>Популярные темы</h2>
+    <div class="popular-list">
+        {% for item in popular_queries %}
+            <a href="/search?q={{ item|urlencode }}">{{ item }}</a>
+        {% endfor %}
+    </div>
+</section>
+
+<section class="notice">
+    <h2>Юридический дисклеймер</h2>
+    <p>Сервис помогает найти опубликованные ответы администрации, но не является официальным ресурсом администрации, не принимает обращения граждан и не оказывает юридические услуги.</p>
+</section>
+{% endblock %}

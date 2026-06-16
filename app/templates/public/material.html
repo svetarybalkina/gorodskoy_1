@@ -1,0 +1,53 @@
+{% extends "public/base.html" %}
+
+{% block title %}Материал - {{ service_name }}{% endblock %}
+
+{% block content %}
+<article class="material-page">
+    <a class="back-link" href="/search">Назад к поиску</a>
+    <h1>{{ material.category.name if material.category else material.topic.name }}</h1>
+    <dl class="material-meta">
+        <div><dt>Дата</dt><dd>{{ material.published_at|date_ru }}</dd></div>
+        <div><dt>Источник</dt><dd>{{ material.source.name }}</dd></div>
+        <div><dt>Тип</dt><dd>{{ material.material_type|material_type_label }}</dd></div>
+        <div><dt>Тема</dt><dd>{{ material.topic.name }}</dd></div>
+        {% if material.category %}
+            <div><dt>Категория</dt><dd>{{ material.category.name }}</dd></div>
+        {% endif %}
+    </dl>
+
+    <section class="official-text">
+        <h2>Официальный текст</h2>
+        <p>{{ material.public_text }}</p>
+    </section>
+
+    {% if material.source_url %}
+        <p class="source-link"><a href="{{ material.source_url }}" rel="noopener noreferrer">Открыть источник</a></p>
+    {% endif %}
+
+    <form action="/materials/{{ material.id }}/not-helpful" method="post" class="feedback-form">
+        <input type="hidden" name="similar_material_ids" value="{{ similar_materials|map(attribute='id')|join(',') }}">
+        <button type="submit">Ответ не подошел</button>
+    </form>
+</article>
+
+<section class="section">
+    <h2>Похожие материалы</h2>
+    {% if similar_materials %}
+        <div class="result-list small">
+            {% for item in similar_materials %}
+                <article class="result-card">
+                    <div class="meta">
+                        <span>{{ item.published_at|date_ru }}</span>
+                        <span>{{ item.source.name }}</span>
+                    </div>
+                    <h3><a href="/materials/{{ item.id }}">{{ item.category.name if item.category else item.topic.name }}</a></h3>
+                    <p>{{ item.public_text[:180] }}{% if item.public_text|length > 180 %}...{% endif %}</p>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Похожих материалов в этой категории пока нет.</p>
+    {% endif %}
+</section>
+{% endblock %}

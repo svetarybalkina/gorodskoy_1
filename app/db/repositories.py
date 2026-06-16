@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.db.enums import (
     ImportStatus,
@@ -71,6 +71,64 @@ class TaxonomyRepository:
     def get_category(self, *, topic_id: int, slug: str) -> Category | None:
         return self.session.scalar(
             select(Category).where(Category.topic_id == topic_id, Category.slug == slug)
+        )
+
+    def list_public_topics(self) -> list[Topic]:
+        return list(
+            self.session.scalars(
+                select(Topic)
+                .where(Topic.is_public.is_(True))
+                .options(selectinload(Topic.categories))
+                .order_by(Topic.sort_order, Topic.name)
+            )
+        )
+
+    def list_public_categories(self) -> list[Category]:
+        return list(
+            self.session.scalars(
+                select(Category)
+                .join(Category.topic)
+                .where(
+                    Topic.is_public.is_(True),
+                    Category.is_public.is_(True),
+                    Category.is_confirmed.is_(True),
+                )
+                .options(selectinload(Category.topic))
+                .order_by(Topic.sort_order, Category.sort_order, Category.name)
+            )
+        )
+
+    def list_admin_topics(self) -> list[Topic]:
+        return list(
+            self.session.scalars(
+                select(Topic)
+                .options(selectinload(Topic.categories))
+                .order_by(Topic.sort_order, Topic.name)
+            )
+        )
+
+    def list_admin_categories(self, *, topic_id: int | None = None) -> list[Category]:
+        statement = (
+            select(Category)
+            .join(Category.topic)
+            .options(selectinload(Category.topic))
+            .order_by(Topic.sort_order, Category.sort_order, Category.name)
+        )
+        if topic_id is not None:
+            statement = statement.where(Category.topic_id == topic_id)
+        return list(self.session.scalars(statement))
+
+    def get_public_category_by_id(self, category_id: int) -> Category | None:
+        return self.session.scalar(
+            select(Category)
+            .join(Category.topic)
+            .where(
+                Category.id == category_id,
+                Category.is_public.is_(True),
+                Category.is_confirmed.is_(True),
+                Topic.is_public.is_(True),
+            )
+            .options(selectinload(Category.topic))
         )
 
     def create_topic(
@@ -161,6 +219,160 @@ class MaterialRepository:
                 .order_by(Material.published_at.desc(), Material.id.desc())
             )
         )
+
+    def list_admin(
+        self,
+        *,
+        status: MaterialStatus | None = None,
+        category_id: int | None = None,
+        topic_id: int | None = None,
+        limit: int = 100,
+    ) -> list[Material]:
+        statement = (
+            select(Material)
+            .options(
+                selectinload(Material.source),
+                selectinload(Material.topic),
+                selectinload(Material.category).selectinload(Category.topic),
+            )
+            .order_by(Material.published_at.desc(), Material.id.desc())
+            .limit(limit)
+        )
+        if status is not None:
+            statement = statement.where(Material.status == status)
+        if category_id is not None:
+            statement = statement.where(Material.category_id == category_id)
+        if topic_id is not None:
+            statement = statement.where(Material.topic_id == topic_id)
+        return list(self.session.scalars(statement))
+
+    def get_admin_material(self, material_id: int) -> Material | None:
+        return self.session.scalar(
+            select(Material)
+            .where(Material.id == material_id)
+            .options(
+                selectinload(Material.source),
+                selectinload(Material.topic),
+                selectinload(Material.category).selectinload(Category.topic),
+                selectinload(Material.admin_notes),
+            )
+        )
+
+    def update_status(self, material_id: int, status: MaterialStatus) -> Material | None:
+        material = self.get_admin_material(material_id)
+        if material is None:
+            return None
+        material.status = status
+        self.session.flush()
+        return material
+
+    def update_category(self, material_id: int, category_id: int | None) -> Material | None:
+        material = self.get_admin_material(material_id)
+        if material is None:
+            return None
+        if category_id is None:
+            material.category_id = None
+        else:
+            category = self.session.get(Category, category_id)
+            if category is None or category.topic_id != material.topic_id:
+                raise ValueError("Category must belong to the material topic")
+            material.category_id = category.id
+        self.session.flush()
+        return material
+
+    def get_public_material(self, material_id: int) -> Material | None:
+        return self.session.scalar(
+            select(Material)
+            .join(Material.topic)
+            .where(
+                Material.id == material_id,
+                Material.status == MaterialStatus.ACTIVE,
+                Material.is_official.is_(True),
+                Topic.is_public.is_(True),
+            )
+            .options(
+                selectinload(Material.source),
+                selectinload(Material.topic),
+                selectinload(Material.category).selectinload(Category.topic),
+            )
+        )
+
+    def search_public(
+        self,
+        *,
+        query: str | None = None,
+        category_id: int | None = None,
+        limit: int = 20,
+    ) -> list[Material]:
+        statement = (
+            select(Material)
+            .join(Material.topic)
+            .outerjoin(Material.category)
+            .where(
+                Material.status == MaterialStatus.ACTIVE,
+                Material.is_official.is_(True),
+                Topic.is_public.is_(True),
+            )
+            .options(
+                selectinload(Material.source),
+                selectinload(Material.topic),
+                selectinload(Material.category).selectinload(Category.topic),
+            )
+            .order_by(Material.published_at.desc(), Material.id.desc())
+            .limit(limit)
+        )
+        if category_id is not None:
+            statement = statement.where(Material.category_id == category_id)
+
+        normalized_query = (query or "").strip().lower()
+        if normalized_query:
+            patterns = {
+                f"%{normalized_query}%",
+                f"%{normalized_query.capitalize()}%",
+                f"%{normalized_query.upper()}%",
+                f"%{(query or '').strip()}%",
+            }
+            statement = statement.where(
+                or_(
+                    *[
+                        condition
+                        for pattern in patterns
+                        for condition in (
+                            Material.public_text.ilike(pattern),
+                            Topic.name.ilike(pattern),
+                            Category.name.ilike(pattern),
+                            Category.slug.ilike(pattern),
+                        )
+                    ]
+                )
+            )
+
+        return list(self.session.scalars(statement))
+
+    def list_similar_public(self, material: Material, *, limit: int = 3) -> list[Material]:
+        statement = (
+            select(Material)
+            .join(Material.topic)
+            .where(
+                Material.id != material.id,
+                Material.status == MaterialStatus.ACTIVE,
+                Material.is_official.is_(True),
+                Topic.is_public.is_(True),
+            )
+            .options(
+                selectinload(Material.source),
+                selectinload(Material.topic),
+                selectinload(Material.category),
+            )
+            .order_by(Material.published_at.desc(), Material.id.desc())
+            .limit(limit)
+        )
+        if material.category_id is not None:
+            statement = statement.where(Material.category_id == material.category_id)
+        else:
+            statement = statement.where(Material.topic_id == material.topic_id)
+
+        return list(self.session.scalars(statement))
 
 
 class QuestionRepository:

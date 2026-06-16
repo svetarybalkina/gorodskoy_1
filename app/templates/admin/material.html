@@ -1,0 +1,86 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Карточка {{ material.id }}{% endblock %}
+
+{% block content %}
+<article class="admin-detail">
+    <p class="eyebrow">Карточка #{{ material.id }}</p>
+    <h1>{{ material.category.name if material.category else material.topic.name }}</h1>
+
+    <dl class="material-meta">
+        <div><dt>Статус</dt><dd><span class="status-badge status-{{ material.status.value }}">{{ material.status|status_label }}</span></dd></div>
+        <div><dt>Дата</dt><dd>{{ material.published_at|date_ru }}</dd></div>
+        <div><dt>Источник</dt><dd>{{ material.source.name }}</dd></div>
+        <div><dt>Тип</dt><dd>{{ material.material_type|material_type_label }}</dd></div>
+        <div><dt>Тема</dt><dd>{{ material.topic.name }}</dd></div>
+        <div><dt>Категория</dt><dd>{{ material.category.name if material.category else "Не задана" }}</dd></div>
+        <div><dt>Официальность</dt><dd>{{ "Да" if material.is_official else "Нет" }}</dd></div>
+        <div><dt>Проверка ФИО</dt><dd>{{ "Требуется" if material.needs_person_name_review else "Нет" }}</dd></div>
+    </dl>
+
+    <section class="admin-actions">
+        <h2>Статус</h2>
+        <div class="action-grid">
+            {% for status in statuses %}
+                <form action="/admin/materials/{{ material.id }}/status" method="post">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="status" value="{{ status.value }}">
+                    <button type="submit" {% if material.status == status %}disabled{% endif %}>{{ status|status_label }}</button>
+                </form>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="admin-actions">
+        <h2>Категория</h2>
+        <form action="/admin/materials/{{ material.id }}/category" method="post" class="admin-form compact">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="category_id">Категория в теме "{{ material.topic.name }}"</label>
+            <select id="category_id" name="category_id">
+                <option value="">Не задана</option>
+                {% for category in categories %}
+                    <option value="{{ category.id }}" {% if material.category_id == category.id %}selected{% endif %}>{{ category.name }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit">Сохранить категорию</button>
+        </form>
+    </section>
+
+    <section class="admin-texts">
+        <div>
+            <h2>Публичная версия</h2>
+            <p class="official-text">{{ material.public_text }}</p>
+        </div>
+        <div>
+            <h2>Оригинальный текст</h2>
+            <p class="official-text">{{ material.original_text }}</p>
+        </div>
+    </section>
+
+    {% if material.source_url %}
+        <p class="source-link"><a href="{{ material.source_url }}" rel="noopener noreferrer">Открыть источник</a></p>
+    {% endif %}
+
+    <section class="admin-actions">
+        <h2>Внутренние заметки</h2>
+        <form action="/admin/materials/{{ material.id }}/notes" method="post" class="admin-form compact">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="body">Новая заметка</label>
+            <textarea id="body" name="body" rows="4" required></textarea>
+            <button type="submit">Добавить заметку</button>
+        </form>
+        {% if material.admin_notes %}
+            <div class="note-list">
+                {% for note in material.admin_notes|sort(attribute="created_at", reverse=True) %}
+                    <article class="note-card">
+                        <p>{{ note.body }}</p>
+                        <p class="muted">{{ note.author or "admin" }} · {{ note.created_at|date_ru }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="muted">Заметок пока нет.</p>
+        {% endif %}
+    </section>
+</article>
+{% endblock %}

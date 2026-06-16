@@ -1,0 +1,11 @@
+{% extends "public/base.html" %}
+
+{% block title %}Спасибо за отметку - {{ service_name }}{% endblock %}
+
+{% block content %}
+<section class="section narrow">
+    <h1>Спасибо, отметка сохранена</h1>
+    <p>Мы учтем, что материал не подошел. Текст вашего запроса не сохранен до внедрения автоматического обезличивания.</p>
+    <a class="read-more" href="/materials/{{ material.id }}">Вернуться к материалу</a>
+</section>
+{% endblock %}

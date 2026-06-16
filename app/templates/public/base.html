@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}{{ service_name }}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/styles.css') }}">
+</head>
+<body>
+    <header class="site-header">
+        <a class="brand" href="/">{{ service_name }}</a>
+        <nav class="top-nav" aria-label="Основная навигация">
+            <a href="/search">Поиск</a>
+            <a href="/legal/disclaimer">О сервисе</a>
+            <a href="/admin">Админка</a>
+        </nav>
+    </header>
+    <main class="page">
+        {% block content %}{% endblock %}
+    </main>
+    <footer class="site-footer">
+        <p>Сервис помогает найти опубликованные ответы администрации, но не является официальным ресурсом администрации.</p>
+        <nav class="legal-links" aria-label="Юридические документы">
+            {% for item in legal_pages %}
+                <a href="/legal/{{ item.slug }}">{{ item.title }}</a>
+            {% endfor %}
+        </nav>
+    </footer>
+</body>
+</html>

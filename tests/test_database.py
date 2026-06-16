@@ -86,9 +86,9 @@ def test_seed_initial_data_creates_topics_categories_and_ads_setting(session: Se
     assert housing is not None
     assert housing.is_public is True
     assert animals is not None
-    assert animals.is_public is True
+    assert animals.is_public is False
     assert taxonomy.get_category(topic_id=housing.id, slug="heating") is not None
-    assert taxonomy.get_category(topic_id=animals.id, slug="stray_dogs") is not None
+    assert taxonomy.get_category(topic_id=housing.id, slug="stray_dogs") is not None
     assert ads_setting.value == "false"
 
 

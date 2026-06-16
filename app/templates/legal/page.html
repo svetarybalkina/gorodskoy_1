@@ -1,0 +1,17 @@
+{% extends "public/base.html" %}
+
+{% block title %}{{ page.title }} - {{ service_name }}{% endblock %}
+
+{% block content %}
+<article class="legal-page">
+    <h1>{{ page.title }}</h1>
+    <p class="lead">{{ page.lead }}</p>
+    {% for heading, body in page.sections %}
+        <section>
+            <h2>{{ heading }}</h2>
+            <p>{{ body }}</p>
+        </section>
+    {% endfor %}
+    <p class="placeholder-note">Документ содержит явные заглушки реквизитов: [НАЗВАНИЕ СЕРВИСА], [ВЛАДЕЛЕЦ / ОПЕРАТОР СЕРВИСА], [ДОМЕН СЕРВИСА], [EMAIL ДЛЯ ОБРАЩЕНИЙ], [КОНТАКТЫ ОПЕРАТОРА]. Перед публичным запуском их нужно заменить.</p>
+</article>
+{% endblock %}
