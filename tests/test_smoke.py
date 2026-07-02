@@ -44,7 +44,7 @@ def test_public_homepage_opens() -> None:
 
     assert response.status_code == 200
     assert "Городской справочник" in response.text
-    assert "Задайте вопрос по ЖКХ или теме животных" in response.text
+    assert "Задайте вопрос по ЖКХ" in response.text
 
 
 def test_admin_redirects_to_login() -> None:

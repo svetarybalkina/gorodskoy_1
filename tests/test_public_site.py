@@ -57,10 +57,10 @@ def seed_public_materials(session: Session) -> None:
     assert transport is not None
     heating = taxonomy.get_category(topic_id=housing.id, slug="heating")
     water = taxonomy.get_category(topic_id=housing.id, slug="water")
-    dogs = taxonomy.get_category(topic_id=housing.id, slug="stray_dogs")
+    animals_category = taxonomy.get_category(topic_id=housing.id, slug="animals")
     assert heating is not None
     assert water is not None
-    assert dogs is not None
+    assert animals_category is not None
 
     repo = MaterialRepository(session)
     heating_material = repo.create(
@@ -98,7 +98,7 @@ def seed_public_materials(session: Session) -> None:
     repo.create(
         source_id=source.id,
         topic_id=housing.id,
-        category_id=dogs.id,
+        category_id=animals_category.id,
         material_type=MaterialType.OFFICIAL_ANSWER,
         status=MaterialStatus.ACTIVE,
         published_at=datetime(2026, 1, 18, tzinfo=UTC),
@@ -153,11 +153,16 @@ def test_homepage_contains_search_categories_popular_disclaimer_and_legal_links(
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "Задайте вопрос по ЖКХ или теме животных" in response.text
+    assert "Задайте вопрос по ЖКХ" in response.text
     assert "ЖКХ" in response.text
-    assert "Безнадзорные собаки" in response.text
+    assert "Животные" in response.text
+    assert "Безнадзорные собаки" not in response.text
+    assert "Отлов безнадзорных животных" not in response.text
+    assert "Агрессивные животные" not in response.text
+    assert "Приюты и передержка" not in response.text
+    assert "Правила содержания животных" not in response.text
     assert response.text.count('class="topic-block"') == 1
-    assert response.text.index("Правила содержания животных") < response.text.index("Другое")
+    assert response.text.index("Животные") < response.text.index("Другое")
     assert "Почему нет отопления?" in response.text
     assert "не является официальным ресурсом администрации" in response.text
     assert "/legal/terms" in response.text
@@ -227,6 +232,52 @@ def test_search_filters_by_public_category(
     assert "Горячая вода будет включена" not in response.text
 
 
+def test_animals_filter_collapses_legacy_detailed_animal_categories(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    with session_factory() as session:
+        taxonomy = TaxonomyRepository(session)
+        housing = taxonomy.get_topic_by_slug("housing")
+        assert housing is not None
+        animals = taxonomy.get_category(topic_id=housing.id, slug="animals")
+        assert animals is not None
+        legacy_category = taxonomy.create_category(
+            topic_id=housing.id,
+            slug="animal_capture",
+            name="Отлов безнадзорных животных",
+            is_public=True,
+            is_confirmed=True,
+            sort_order=75,
+        )
+        source = SourceRepository(session).create(
+            code="legacy-animal-source",
+            name="Официальный канал по животным",
+            kind=SourceKind.OFFICIAL_CHANNEL,
+        )
+        MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=legacy_category.id,
+            material_type=MaterialType.OFFICIAL_POST,
+            status=MaterialStatus.ACTIVE,
+            published_at=datetime(2026, 2, 1, tzinfo=UTC),
+            original_text="Официальный текст про отлов животных.",
+            public_text="Заявки на отлов безнадзорных животных принимаются диспетчерской службой.",
+        )
+        session.commit()
+        animals_category_id = animals.id
+
+    filters_response = client.get("/search?q=животных")
+    animals_response = client.get(f"/search?category_id={animals_category_id}&q=отлов")
+
+    assert filters_response.status_code == 200
+    assert "Животные" in filters_response.text
+    assert "Отлов безнадзорных животных" not in filters_response.text
+    assert animals_response.status_code == 200
+    assert "Заявки на отлов безнадзорных животных принимаются диспетчерской службой." in animals_response.text
+
+
 def test_empty_search_state_is_calm_and_lists_categories(
     public_app_context: tuple[TestClient, sessionmaker[Session]],
 ) -> None:
@@ -237,7 +288,7 @@ def test_empty_search_state_is_calm_and_lists_categories(
     assert response.status_code == 200
     assert "Подходящих материалов пока нет" in response.text
     assert "Попробуйте переформулировать вопрос" in response.text
-    assert "Безнадзорные собаки" in response.text
+    assert "Животные" in response.text
 
 
 def test_material_card_shows_public_fields_similar_and_source_url_only_when_present(

@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Category, Setting, Topic
+from app.db.models import Category, Material, ProblemQuery, ResidentQuestion, Setting, Topic
 
 
 TOPICS = [
@@ -24,14 +24,18 @@ BASE_CATEGORIES = {
         ("yard", "Двор", 40),
         ("management_company", "Управляющая компания", 50),
         ("bills", "Квитанции / начисления", 60),
-        ("stray_dogs", "Безнадзорные собаки", 70),
-        ("animal_capture", "Отлов безнадзорных животных", 80),
-        ("aggressive_animals", "Агрессивные животные", 90),
-        ("shelters", "Приюты и передержка", 100),
-        ("pet_rules", "Правила содержания животных", 110),
-        ("other", "Другое", 120),
+        ("animals", "Животные", 70),
+        ("other", "Другое", 80),
     ],
     "animals": [],
+}
+
+DETAILED_ANIMAL_CATEGORY_SLUGS = {
+    "stray_dogs",
+    "animal_capture",
+    "aggressive_animals",
+    "shelters",
+    "pet_rules",
 }
 
 
@@ -71,6 +75,39 @@ def seed_initial_data(session: Session) -> None:
                 category.is_public = True
                 category.is_confirmed = True
                 category.sort_order = sort_order
+
+    housing_animals_category = session.scalar(
+        select(Category).where(
+            Category.topic_id == topics_by_slug["housing"].id,
+            Category.slug == "animals",
+        )
+    )
+    detailed_animal_categories = list(
+        session.scalars(
+            select(Category).where(Category.slug.in_(DETAILED_ANIMAL_CATEGORY_SLUGS))
+        )
+    )
+    detailed_animal_category_ids = [category.id for category in detailed_animal_categories]
+    for category in detailed_animal_categories:
+        category.is_public = False
+        category.is_confirmed = True
+    if housing_animals_category is not None and detailed_animal_category_ids:
+        session.query(Material).filter(Material.category_id.in_(detailed_animal_category_ids)).update(
+            {Material.category_id: housing_animals_category.id},
+            synchronize_session=False,
+        )
+        session.query(ResidentQuestion).filter(
+            ResidentQuestion.category_id.in_(detailed_animal_category_ids)
+        ).update(
+            {ResidentQuestion.category_id: housing_animals_category.id},
+            synchronize_session=False,
+        )
+        session.query(ProblemQuery).filter(
+            ProblemQuery.category_id.in_(detailed_animal_category_ids)
+        ).update(
+            {ProblemQuery.category_id: housing_animals_category.id},
+            synchronize_session=False,
+        )
 
     setting = session.scalar(select(Setting).where(Setting.key == "ADS_ENABLED"))
     if setting is None:

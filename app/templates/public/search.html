@@ -8,7 +8,7 @@
     <form class="search-form compact" action="/search" method="get">
         <label for="q">Запрос</label>
         <div class="search-row">
-            <input id="q" name="q" type="search" value="{{ query }}" placeholder="Задайте вопрос по ЖКХ или теме животных">
+            <input id="q" name="q" type="search" value="{{ query }}" placeholder="Задайте вопрос по ЖКХ">
             {% if selected_category %}
                 <input type="hidden" name="category_id" value="{{ selected_category.id }}">
             {% endif %}
@@ -19,7 +19,7 @@
         <a href="/search{% if query %}?q={{ query|urlencode }}{% endif %}" class="{% if not selected_category %}active{% endif %}">Все категории</a>
         {% for category in categories %}
             <a href="/search?category_id={{ category.id }}{% if query %}&q={{ query|urlencode }}{% endif %}" class="{% if selected_category and selected_category.id == category.id %}active{% endif %}">
-                {{ category.topic.name }}: {{ category.name }}
+                {{ category.topic.name }}: {{ category|public_category_name }}
             </a>
         {% endfor %}
     </div>
@@ -36,7 +36,7 @@
                         <span>{{ material.published_at|date_ru }}</span>
                         <span>{{ material.source.name }}</span>
                     </div>
-                    <h2><a href="/materials/{{ material.id }}">{{ material.category.name if material.category else material.topic.name }}</a></h2>
+                    <h2><a href="/materials/{{ material.id }}">{{ material|public_material_category_name }}</a></h2>
                     <p>{{ material.public_text[:320] }}{% if material.public_text|length > 320 %}...{% endif %}</p>
                     <a class="read-more" href="/materials/{{ material.id }}">Открыть материал</a>
                 </article>
@@ -48,7 +48,7 @@
             <p>Попробуйте переформулировать вопрос или выбрать одну из публичных категорий.</p>
             <div class="category-list">
                 {% for category in categories %}
-                    <a href="/search?category_id={{ category.id }}">{{ category.topic.name }}: {{ category.name }}</a>
+                    <a href="/search?category_id={{ category.id }}">{{ category.topic.name }}: {{ category|public_category_name }}</a>
                 {% endfor %}
             </div>
         </div>

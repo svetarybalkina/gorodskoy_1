@@ -53,10 +53,10 @@ def seed_admin_materials(session: Session) -> None:
     assert housing is not None
     heating = taxonomy.get_category(topic_id=housing.id, slug="heating")
     water = taxonomy.get_category(topic_id=housing.id, slug="water")
-    dogs = taxonomy.get_category(topic_id=housing.id, slug="stray_dogs")
+    animals_category = taxonomy.get_category(topic_id=housing.id, slug="animals")
     assert heating is not None
     assert water is not None
-    assert dogs is not None
+    assert animals_category is not None
 
     repo = MaterialRepository(session)
     active = repo.create(
@@ -82,7 +82,7 @@ def seed_admin_materials(session: Session) -> None:
     repo.create(
         source_id=source.id,
         topic_id=housing.id,
-        category_id=dogs.id,
+        category_id=animals_category.id,
         material_type=MaterialType.OFFICIAL_POST,
         status=MaterialStatus.DRAFT,
         published_at=datetime(2026, 6, 14, tzinfo=UTC),

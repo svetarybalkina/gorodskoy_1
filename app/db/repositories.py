@@ -33,6 +33,14 @@ from app.db.models import (
     Topic,
 )
 
+DETAILED_ANIMAL_CATEGORY_SLUGS = {
+    "stray_dogs",
+    "animal_capture",
+    "aggressive_animals",
+    "shelters",
+    "pet_rules",
+}
+
 
 class SourceRepository:
     def __init__(self, session: Session) -> None:
@@ -84,19 +92,28 @@ class TaxonomyRepository:
         )
 
     def list_public_categories(self) -> list[Category]:
-        return list(
+        return [
+            category
+            for category in self.session.scalars(
+                self._public_categories_statement().order_by(
+                    Topic.sort_order, Category.sort_order, Category.name
+                )
+            )
+            if category.slug not in DETAILED_ANIMAL_CATEGORY_SLUGS
+        ]
+
+    def list_public_animal_category_ids(self) -> list[int]:
+        categories = list(
             self.session.scalars(
                 select(Category)
                 .join(Category.topic)
                 .where(
-                    Topic.is_public.is_(True),
-                    Category.is_public.is_(True),
-                    Category.is_confirmed.is_(True),
+                    Topic.slug == "housing",
+                    Category.slug.in_({"animals", *DETAILED_ANIMAL_CATEGORY_SLUGS}),
                 )
-                .options(selectinload(Category.topic))
-                .order_by(Topic.sort_order, Category.sort_order, Category.name)
             )
         )
+        return [category.id for category in categories]
 
     def list_admin_topics(self) -> list[Topic]:
         return list(
@@ -120,13 +137,19 @@ class TaxonomyRepository:
 
     def get_public_category_by_id(self, category_id: int) -> Category | None:
         return self.session.scalar(
+            self._public_categories_statement()
+            .where(Category.id == category_id)
+            .where(Category.slug.not_in(DETAILED_ANIMAL_CATEGORY_SLUGS))
+        )
+
+    def _public_categories_statement(self):
+        return (
             select(Category)
             .join(Category.topic)
             .where(
-                Category.id == category_id,
+                Topic.is_public.is_(True),
                 Category.is_public.is_(True),
                 Category.is_confirmed.is_(True),
-                Topic.is_public.is_(True),
             )
             .options(selectinload(Category.topic))
         )
@@ -322,7 +345,12 @@ class MaterialRepository:
             .limit(limit)
         )
         if category_id is not None:
-            statement = statement.where(Material.category_id == category_id)
+            category = self.session.get(Category, category_id)
+            if category is not None and category.slug == "animals":
+                category_ids = TaxonomyRepository(self.session).list_public_animal_category_ids()
+                statement = statement.where(Material.category_id.in_(category_ids))
+            else:
+                statement = statement.where(Material.category_id == category_id)
 
         normalized_query = (query or "").strip().lower()
         if normalized_query:

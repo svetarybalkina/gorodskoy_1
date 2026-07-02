@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.db.enums import MaterialType, ProblemQueryAction, ProblemQueryChannel
+from app.db.models import Category, Material
 from app.db.repositories import MaterialRepository, ProblemQueryRepository, TaxonomyRepository
 from app.db.session import get_db_session
 
@@ -20,6 +21,13 @@ templates = Jinja2Templates(directory="app/templates")
 
 
 SAFE_PROBLEM_QUERY_TEXT = "[текст запроса не сохранен до внедрения обезличивания]"
+DETAILED_ANIMAL_CATEGORY_SLUGS = {
+    "stray_dogs",
+    "animal_capture",
+    "aggressive_animals",
+    "shelters",
+    "pet_rules",
+}
 
 
 @dataclass(frozen=True)
@@ -39,7 +47,7 @@ LEGAL_PAGES: dict[str, LegalPage] = {
             (
                 "1. Общие положения",
                 "[НАЗВАНИЕ СЕРВИСА] является информационно-поисковым сервисом справочного характера. "
-                "Сервис помогает находить официально опубликованные материалы по ЖКХ и теме животных, "
+                "Сервис помогает находить официально опубликованные материалы по ЖКХ, "
                 "но не является официальным ресурсом администрации и не принимает обращения граждан.",
             ),
             (
@@ -202,8 +210,22 @@ def format_date(value: datetime) -> str:
     return value.strftime("%d.%m.%Y")
 
 
+def public_category_name(category: Category) -> str:
+    if category.slug in DETAILED_ANIMAL_CATEGORY_SLUGS:
+        return "Животные"
+    return category.name
+
+
+def public_material_category_name(material: Material) -> str:
+    if material.category is None:
+        return material.topic.name
+    return public_category_name(material.category)
+
+
 templates.env.filters["material_type_label"] = material_type_label
 templates.env.filters["date_ru"] = format_date
+templates.env.filters["public_category_name"] = public_category_name
+templates.env.filters["public_material_category_name"] = public_material_category_name
 
 
 def public_context(settings: Settings) -> dict[str, object]:
