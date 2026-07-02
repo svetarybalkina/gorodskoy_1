@@ -7,6 +7,9 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.enums import (
+    DictionaryCandidateSource,
+    DictionaryCandidateStatus,
+    DictionaryCandidateType,
     ImportStatus,
     LinkReason,
     MaterialStatus,
@@ -19,6 +22,7 @@ from app.db.enums import (
 from app.db.models import (
     AdminNote,
     Category,
+    DictionaryCandidate,
     ImportBatch,
     ImportReport,
     Material,
@@ -673,6 +677,107 @@ class ProblemQueryRepository:
         self.session.add(query)
         self.session.flush()
         return query
+
+    def list_recent(self, *, limit: int = 100) -> list[ProblemQuery]:
+        return list(
+            self.session.scalars(
+                select(ProblemQuery)
+                .options(
+                    selectinload(ProblemQuery.category),
+                    selectinload(ProblemQuery.shown_material),
+                )
+                .order_by(ProblemQuery.created_at.desc(), ProblemQuery.id.desc())
+                .limit(limit)
+            )
+        )
+
+
+class DictionaryCandidateRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def create_or_increment(
+        self,
+        *,
+        text: str,
+        normalized_text: str,
+        candidate_type: DictionaryCandidateType,
+        source: DictionaryCandidateSource,
+        category_id: int | None = None,
+        material_id: int | None = None,
+        problem_query_id: int | None = None,
+    ) -> DictionaryCandidate:
+        candidate = self.session.scalar(
+            select(DictionaryCandidate).where(
+                DictionaryCandidate.normalized_text == normalized_text,
+                DictionaryCandidate.candidate_type == candidate_type,
+                DictionaryCandidate.category_id == category_id,
+                DictionaryCandidate.material_id == material_id,
+            )
+        )
+        if candidate is None:
+            candidate = DictionaryCandidate(
+                text=text,
+                normalized_text=normalized_text,
+                candidate_type=candidate_type,
+                source=source,
+                category_id=category_id,
+                material_id=material_id,
+                problem_query_id=problem_query_id,
+                occurrences=1,
+            )
+            self.session.add(candidate)
+        else:
+            candidate.occurrences += 1
+            if problem_query_id is not None:
+                candidate.problem_query_id = problem_query_id
+        self.session.flush()
+        return candidate
+
+    def list_admin(
+        self,
+        *,
+        status: DictionaryCandidateStatus | None = None,
+        limit: int = 100,
+    ) -> list[DictionaryCandidate]:
+        statement = (
+            select(DictionaryCandidate)
+            .options(
+                selectinload(DictionaryCandidate.category).selectinload(Category.topic),
+                selectinload(DictionaryCandidate.material),
+                selectinload(DictionaryCandidate.problem_query),
+            )
+            .order_by(DictionaryCandidate.created_at.desc(), DictionaryCandidate.id.desc())
+            .limit(limit)
+        )
+        if status is not None:
+            statement = statement.where(DictionaryCandidate.status == status)
+        return list(self.session.scalars(statement))
+
+    def get(self, candidate_id: int) -> DictionaryCandidate | None:
+        return self.session.scalar(
+            select(DictionaryCandidate)
+            .where(DictionaryCandidate.id == candidate_id)
+            .options(selectinload(DictionaryCandidate.material))
+        )
+
+    def approve(self, candidate_id: int) -> DictionaryCandidate | None:
+        candidate = self.get(candidate_id)
+        if candidate is None:
+            return None
+        candidate.status = DictionaryCandidateStatus.APPROVED
+        candidate.decided_at = datetime.utcnow()
+        self.session.flush()
+        return candidate
+
+    def reject(self, candidate_id: int) -> DictionaryCandidate | None:
+        candidate = self.get(candidate_id)
+        if candidate is None:
+            return None
+        candidate.status = DictionaryCandidateStatus.REJECTED
+        candidate.decided_at = datetime.utcnow()
+        self.session.flush()
+        return candidate
 
 
 class AdminNoteRepository:

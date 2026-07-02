@@ -20,16 +20,27 @@ from app.admin.auth import (
     verify_admin_credentials,
 )
 from app.core.config import Settings, get_settings
-from app.db.enums import ImportStatus, MaterialStatus, MaterialType, SourceKind
+from app.db.enums import (
+    DictionaryCandidateSource,
+    DictionaryCandidateStatus,
+    DictionaryCandidateType,
+    ImportStatus,
+    MaterialStatus,
+    MaterialType,
+    SourceKind,
+)
 from app.db.repositories import (
     AdminNoteRepository,
+    DictionaryCandidateRepository,
     ImportRepository,
     MaterialRepository,
+    ProblemQueryRepository,
     ReviewRepository,
     TaxonomyRepository,
 )
 from app.db.session import get_db_session
 from app.importers.telegram_json import TelegramImportError, TelegramJsonImporter
+from app.search import SearchService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
@@ -80,11 +91,40 @@ def source_kind_label(kind_value: SourceKind | str) -> str:
     }[kind_item]
 
 
+def dictionary_candidate_status_label(status_value: DictionaryCandidateStatus | str) -> str:
+    status_item = DictionaryCandidateStatus(status_value)
+    return {
+        DictionaryCandidateStatus.PENDING: "Ожидает решения",
+        DictionaryCandidateStatus.APPROVED: "Подтверждено",
+        DictionaryCandidateStatus.REJECTED: "Отклонено",
+    }[status_item]
+
+
+def dictionary_candidate_type_label(type_value: DictionaryCandidateType | str) -> str:
+    type_item = DictionaryCandidateType(type_value)
+    return {
+        DictionaryCandidateType.MARKER: "Маркер",
+        DictionaryCandidateType.SYNONYM: "Синоним",
+        DictionaryCandidateType.QUESTION_VARIANT: "Вариант формулировки",
+    }[type_item]
+
+
+def dictionary_candidate_source_label(source_value: DictionaryCandidateSource | str) -> str:
+    source_item = DictionaryCandidateSource(source_value)
+    return {
+        DictionaryCandidateSource.SEARCH: "Поиск",
+        DictionaryCandidateSource.IMPORT: "Импорт",
+    }[source_item]
+
+
 templates.env.filters["date_ru"] = date_ru
 templates.env.filters["material_type_label"] = material_type_label
 templates.env.filters["status_label"] = status_label
 templates.env.filters["import_status_label"] = import_status_label
 templates.env.filters["source_kind_label"] = source_kind_label
+templates.env.filters["dictionary_candidate_status_label"] = dictionary_candidate_status_label
+templates.env.filters["dictionary_candidate_type_label"] = dictionary_candidate_type_label
+templates.env.filters["dictionary_candidate_source_label"] = dictionary_candidate_source_label
 
 
 def admin_template_context(request: Request, settings: Settings, admin_user: str | None = None) -> dict:
@@ -94,8 +134,9 @@ def admin_template_context(request: Request, settings: Settings, admin_user: str
         "admin_user": admin_user,
         "csrf_token": ensure_csrf_token(request),
         "default_password_warning": settings.admin_password == "change_me",
-        "statuses": list(MaterialStatus),
-    }
+            "statuses": list(MaterialStatus),
+            "candidate_statuses": list(DictionaryCandidateStatus),
+        }
 
 
 def parse_status(value: str | None) -> MaterialStatus | None:
@@ -114,6 +155,15 @@ def parse_optional_int(value: str | None, *, field_name: str) -> int | None:
         return int(value)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid {field_name}") from exc
+
+
+def parse_candidate_status(value: str | None) -> DictionaryCandidateStatus | None:
+    if not value:
+        return None
+    try:
+        return DictionaryCandidateStatus(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown candidate status") from exc
 
 
 async def read_urlencoded_form(request: Request) -> dict[str, str]:
@@ -236,6 +286,26 @@ async def reviews_list(
             **admin_template_context(request, settings, admin_user),
             "materials": MaterialRepository(db).list_needs_review(),
             "person_name_reviews": ReviewRepository(db).list_pending_person_name_reviews(),
+        },
+    )
+
+
+@router.get("/search-quality", response_class=HTMLResponse)
+async def search_quality(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    candidate_status = parse_candidate_status(request.query_params.get("candidate_status"))
+    return templates.TemplateResponse(
+        request,
+        "admin/search_quality.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "problem_queries": ProblemQueryRepository(db).list_recent(),
+            "candidates": DictionaryCandidateRepository(db).list_admin(status=candidate_status),
+            "selected_candidate_status": candidate_status.value if candidate_status else "",
         },
     )
 
@@ -363,6 +433,7 @@ async def update_material_status(
     material = MaterialRepository(db).update_status(material_id, new_status)
     if material is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    SearchService(db).reindex_material(material_id)
     db.commit()
     return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
 
@@ -383,8 +454,41 @@ async def update_material_category(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     if material is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    SearchService(db).reindex_material(material_id)
     db.commit()
     return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/search-quality/candidates/{candidate_id}/approve")
+async def approve_dictionary_candidate(
+    request: Request,
+    candidate_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    candidate = SearchService(db).approve_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.commit()
+    return RedirectResponse("/admin/search-quality", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/search-quality/candidates/{candidate_id}/reject")
+async def reject_dictionary_candidate(
+    request: Request,
+    candidate_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    candidate = SearchService(db).reject_candidate(candidate_id)
+    if candidate is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.commit()
+    return RedirectResponse("/admin/search-quality", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/materials/{material_id}/notes")

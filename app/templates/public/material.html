@@ -27,6 +27,7 @@
 
     <form action="/materials/{{ material.id }}/not-helpful" method="post" class="feedback-form">
         <input type="hidden" name="similar_material_ids" value="{{ similar_materials|map(attribute='id')|join(',') }}">
+        <input type="hidden" name="query" value="{{ query }}">
         <button type="submit">Ответ не подошел</button>
     </form>
 </article>

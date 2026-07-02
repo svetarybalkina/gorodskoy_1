@@ -54,3 +54,20 @@ class ProblemQueryAction(StrEnum):
     CHOOSE_CATEGORY = "choose_category"
     VIEW_SIMILAR = "view_similar"
     NO_ACTION = "no_action"
+
+
+class DictionaryCandidateType(StrEnum):
+    MARKER = "marker"
+    SYNONYM = "synonym"
+    QUESTION_VARIANT = "question_variant"
+
+
+class DictionaryCandidateSource(StrEnum):
+    SEARCH = "search"
+    IMPORT = "import"
+
+
+class DictionaryCandidateStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"

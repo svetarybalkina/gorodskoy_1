@@ -68,6 +68,7 @@ def test_alembic_migration_creates_mvp_tables(tmp_path: Path, monkeypatch: pytes
         "redaction_events",
         "person_name_reviews",
         "problem_queries",
+        "dictionary_candidates",
         "admin_notes",
         "settings",
     }.issubset(table_names)

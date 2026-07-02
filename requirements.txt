@@ -8,3 +8,4 @@ aiogram==3.17.0
 pytest==8.3.4
 httpx==0.28.1
 python-multipart==0.0.20
+pymorphy3==2.0.2

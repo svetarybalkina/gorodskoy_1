@@ -20,6 +20,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.enums import (
+    DictionaryCandidateSource,
+    DictionaryCandidateStatus,
+    DictionaryCandidateType,
     ImportStatus,
     LinkReason,
     MaterialStatus,
@@ -103,6 +106,7 @@ class Category(TimestampMixin, Base):
     materials: Mapped[list[Material]] = relationship(back_populates="category")
     resident_questions: Mapped[list[ResidentQuestion]] = relationship(back_populates="category")
     problem_queries: Mapped[list[ProblemQuery]] = relationship(back_populates="category")
+    dictionary_candidates: Mapped[list[DictionaryCandidate]] = relationship(back_populates="category")
 
 
 class ImportBatch(TimestampMixin, Base):
@@ -170,6 +174,7 @@ class Material(TimestampMixin, Base):
     redaction_events: Mapped[list[RedactionEvent]] = relationship(back_populates="material")
     person_name_reviews: Mapped[list[PersonNameReview]] = relationship(back_populates="material")
     admin_notes: Mapped[list[AdminNote]] = relationship(back_populates="material")
+    dictionary_candidates: Mapped[list[DictionaryCandidate]] = relationship(back_populates="material")
 
 
 class ResidentQuestion(TimestampMixin, Base):
@@ -303,6 +308,49 @@ class ProblemQuery(TimestampMixin, Base):
 
     shown_material: Mapped[Material | None] = relationship()
     category: Mapped[Category | None] = relationship(back_populates="problem_queries")
+
+
+class DictionaryCandidate(TimestampMixin, Base):
+    __tablename__ = "dictionary_candidates"
+    __table_args__ = (
+        UniqueConstraint(
+            "normalized_text",
+            "candidate_type",
+            "category_id",
+            "material_id",
+            name="uq_dictionary_candidates_normalized_type_category_material",
+        ),
+        Index("ix_dictionary_candidates_status", "status"),
+        Index("ix_dictionary_candidates_category_id", "category_id"),
+        Index("ix_dictionary_candidates_material_id", "material_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    candidate_type: Mapped[DictionaryCandidateType] = mapped_column(
+        enum_column(DictionaryCandidateType, name="dictionary_candidate_type"),
+        nullable=False,
+    )
+    source: Mapped[DictionaryCandidateSource] = mapped_column(
+        enum_column(DictionaryCandidateSource, name="dictionary_candidate_source"),
+        nullable=False,
+    )
+    status: Mapped[DictionaryCandidateStatus] = mapped_column(
+        enum_column(DictionaryCandidateStatus, name="dictionary_candidate_status"),
+        default=DictionaryCandidateStatus.PENDING,
+        nullable=False,
+    )
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("categories.id"))
+    material_id: Mapped[int | None] = mapped_column(ForeignKey("materials.id"))
+    problem_query_id: Mapped[int | None] = mapped_column(ForeignKey("problem_queries.id"))
+    occurrences: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    decision_note: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    category: Mapped[Category | None] = relationship(back_populates="dictionary_candidates")
+    material: Mapped[Material | None] = relationship(back_populates="dictionary_candidates")
+    problem_query: Mapped[ProblemQuery | None] = relationship()
 
 
 class AdminNote(TimestampMixin, Base):

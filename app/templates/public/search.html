@@ -28,6 +28,9 @@
 <section class="section">
     {% if materials %}
         <p class="result-note">Мы нашли официальные материалы на похожий запрос.</p>
+        {% if match_level in ["medium", "low"] %}
+            <div class="notice">Совпадение может быть неточным. Проверьте дату, источник и официальный текст материала.</div>
+        {% endif %}
         <div class="result-list">
             {% for material in materials %}
                 <article class="result-card">
@@ -36,9 +39,9 @@
                         <span>{{ material.published_at|date_ru }}</span>
                         <span>{{ material.source.name }}</span>
                     </div>
-                    <h2><a href="/materials/{{ material.id }}">{{ material|public_material_category_name }}</a></h2>
+                    <h2><a href="/materials/{{ material.id }}{% if query %}?q={{ query|urlencode }}{% endif %}">{{ material|public_material_category_name }}</a></h2>
                     <p>{{ material.public_text[:320] }}{% if material.public_text|length > 320 %}...{% endif %}</p>
-                    <a class="read-more" href="/materials/{{ material.id }}">Открыть материал</a>
+                    <a class="read-more" href="/materials/{{ material.id }}{% if query %}?q={{ query|urlencode }}{% endif %}">Открыть материал</a>
                 </article>
             {% endfor %}
         </div>
@@ -46,6 +49,9 @@
         <div class="empty-state">
             <h2>Подходящих материалов пока нет</h2>
             <p>Попробуйте переформулировать вопрос или выбрать одну из публичных категорий.</p>
+            {% if problem_query_saved %}
+                <p class="muted">Мы сохранили обезличенную отметку о неудачном поиске, чтобы администратор мог улучшить словарь.</p>
+            {% endif %}
             <div class="category-list">
                 {% for category in categories %}
                     <a href="/search?category_id={{ category.id }}">{{ category.topic.name }}: {{ category|public_category_name }}</a>

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.db.enums import MaterialStatus, MaterialType, SourceKind
-from app.db.models import AdminNote, Material, ProblemQuery
+from app.db.models import AdminNote, DictionaryCandidate, Material, ProblemQuery
 from app.db.repositories import MaterialRepository, SourceRepository, TaxonomyRepository
 from app.db.seed import seed_initial_data
 from app.db.session import create_database_engine, get_db_session
@@ -351,10 +351,11 @@ def test_not_helpful_creates_problem_query_without_raw_user_text(
     with session_factory() as session:
         problem_query = session.query(ProblemQuery).one()
         assert problem_query.anonymized_text == SAFE_PROBLEM_QUERY_TEXT
-        assert problem_query.normalized_text is None
+        assert problem_query.normalized_text is not None
         assert problem_query.shown_material_id == material_id
         assert problem_query.category_id == category_id
         assert problem_query.similar_material_ids == [2, 3]
         assert problem_query.channel.value == "website"
         assert problem_query.user_action.value == "rephrase"
         assert problem_query.match_level == "not_helpful"
+        assert session.query(DictionaryCandidate).count() == 1

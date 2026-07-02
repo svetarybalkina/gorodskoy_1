@@ -10,10 +10,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
-from app.db.enums import MaterialType, ProblemQueryAction, ProblemQueryChannel
+from app.db.enums import MaterialType
 from app.db.models import Category, Material
-from app.db.repositories import MaterialRepository, ProblemQueryRepository, TaxonomyRepository
+from app.db.repositories import MaterialRepository, TaxonomyRepository
 from app.db.session import get_db_session
+from app.search import SearchService
 
 
 router = APIRouter(tags=["public"])
@@ -269,7 +270,9 @@ async def search(
     if category_id is not None and selected_category is None:
         raise HTTPException(status_code=404, detail="Category not found")
 
-    materials = MaterialRepository(db).search_public(query=q, category_id=category_id)
+    search_response = SearchService(db).search_public(query=q, category_id=category_id)
+    if search_response.problem_query_saved:
+        db.commit()
     return templates.TemplateResponse(
         request,
         "public/search.html",
@@ -278,7 +281,9 @@ async def search(
             "query": q.strip(),
             "categories": taxonomy.list_public_categories(),
             "selected_category": selected_category,
-            "materials": materials,
+            "materials": search_response.materials,
+            "match_level": search_response.match_level,
+            "problem_query_saved": search_response.problem_query_saved,
         },
     )
 
@@ -303,6 +308,7 @@ async def material_detail(
             **public_context(settings),
             "material": material,
             "similar_materials": similar_materials,
+            "query": request.query_params.get("q", "").strip(),
         },
     )
 
@@ -326,15 +332,11 @@ async def mark_not_helpful(
         for value in similar_material_ids.split(",")
         if value.strip().isdigit()
     ]
-    ProblemQueryRepository(db).create(
-        anonymized_text=SAFE_PROBLEM_QUERY_TEXT,
-        channel=ProblemQueryChannel.WEBSITE,
-        shown_material_id=material.id,
-        category_id=material.category_id,
+    original_query = form_data.get("query", [""])[0]
+    SearchService(db).record_not_helpful(
+        original_query=original_query or SAFE_PROBLEM_QUERY_TEXT,
+        material=material,
         similar_material_ids=parsed_similar_ids,
-        user_action=ProblemQueryAction.REPHRASE,
-        match_level="not_helpful",
-        selection_reason="Пользователь нажал кнопку 'Ответ не подошел' на публичной карточке.",
     )
     db.commit()
 
