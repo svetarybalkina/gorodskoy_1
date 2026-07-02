@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.admin.auth import (
     CurrentAdmin,
@@ -18,12 +20,13 @@ from app.admin.auth import (
     verify_admin_credentials,
 )
 from app.core.config import Settings, get_settings
-from app.db.enums import MaterialStatus, MaterialType
-from app.db.repositories import AdminNoteRepository, MaterialRepository, TaxonomyRepository
+from app.db.enums import ImportStatus, MaterialStatus, MaterialType, SourceKind
+from app.db.repositories import AdminNoteRepository, ImportRepository, MaterialRepository, TaxonomyRepository
 from app.db.session import get_db_session
+from app.importers.telegram_json import TelegramImportError, TelegramJsonImporter
 
 router = APIRouter(prefix="/admin", tags=["admin"])
-templates = Jinja2Templates(directory="app/templates")
+templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 
 
 def date_ru(value: datetime) -> str:
@@ -50,9 +53,32 @@ def status_label(status_value: MaterialStatus | str) -> str:
     }[status_item]
 
 
+def import_status_label(status_value: ImportStatus | str) -> str:
+    status_item = ImportStatus(status_value)
+    return {
+        ImportStatus.PENDING: "Ожидает обработки",
+        ImportStatus.PROCESSING: "Обрабатывается",
+        ImportStatus.COMPLETED: "Завершен",
+        ImportStatus.COMPLETED_WITH_ERRORS: "Завершен с ошибками",
+        ImportStatus.FAILED: "Ошибка",
+    }[status_item]
+
+
+def source_kind_label(kind_value: SourceKind | str) -> str:
+    kind_item = SourceKind(kind_value)
+    return {
+        SourceKind.OFFICIAL_BOT: "Официальный бот",
+        SourceKind.OFFICIAL_CHANNEL: "Официальный канал",
+        SourceKind.WEBSITE: "Сайт",
+        SourceKind.TELEGRAM_BOT: "Telegram-бот",
+    }[kind_item]
+
+
 templates.env.filters["date_ru"] = date_ru
 templates.env.filters["material_type_label"] = material_type_label
 templates.env.filters["status_label"] = status_label
+templates.env.filters["import_status_label"] = import_status_label
+templates.env.filters["source_kind_label"] = source_kind_label
 
 
 def admin_template_context(request: Request, settings: Settings, admin_user: str | None = None) -> dict:
@@ -165,6 +191,113 @@ async def materials_list(
             "selected_category_id": category_id,
             "selected_topic_id": topic_id,
         },
+    )
+
+
+@router.get("/imports", response_class=HTMLResponse)
+async def imports_list(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "admin/imports.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "batches": ImportRepository(db).list_batches(),
+            "source_configured": bool(settings.official_telegram_source_id.strip()),
+            "official_source_id": settings.official_telegram_source_id,
+            "official_source_name": settings.official_telegram_source_name,
+            "official_source_kind": settings.official_telegram_source_kind,
+            "error": None,
+        },
+    )
+
+
+@router.post("/imports", response_class=HTMLResponse)
+async def imports_upload(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    form = await request.form()
+    validate_csrf_token(request, str(form.get("csrf_token", "")))
+    uploaded_file = form.get("file")
+    if not isinstance(uploaded_file, (UploadFile, StarletteUploadFile)):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON file is required")
+    content = await uploaded_file.read()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="JSON file is empty")
+    try:
+        result = TelegramJsonImporter(session=db, settings=settings).import_bytes(
+            filename=uploaded_file.filename or "telegram-export.json",
+            content=content,
+        )
+    except TelegramImportError as exc:
+        db.rollback()
+        return templates.TemplateResponse(
+            request,
+            "admin/imports.html",
+            {
+                **admin_template_context(request, settings, admin_user),
+                "batches": ImportRepository(db).list_batches(),
+                "source_configured": bool(settings.official_telegram_source_id.strip()),
+                "official_source_id": settings.official_telegram_source_id,
+                "official_source_name": settings.official_telegram_source_name,
+                "official_source_kind": settings.official_telegram_source_kind,
+                "error": str(exc),
+            },
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    db.commit()
+    return RedirectResponse(f"/admin/imports/{result.batch_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/imports/{batch_id}", response_class=HTMLResponse)
+async def import_detail(
+    request: Request,
+    batch_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    import_repo = ImportRepository(db)
+    batch = import_repo.get_batch(batch_id)
+    report = import_repo.get_report_for_batch(batch_id)
+    if batch is None or report is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return templates.TemplateResponse(
+        request,
+        "admin/import_detail.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "batch": batch,
+            "report": report,
+            "summary": report.summary,
+            "errors": report.errors,
+        },
+    )
+
+
+@router.get("/imports/{batch_id}/report/download")
+async def import_report_download(
+    batch_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> FileResponse:
+    report = ImportRepository(db).get_report_for_batch(batch_id)
+    if report is None or not report.report_file_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    report_path = Path(report.report_file_path)
+    if not report_path.exists() or not report_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    return FileResponse(
+        report_path,
+        media_type="application/json",
+        filename=report_path.name,
     )
 
 

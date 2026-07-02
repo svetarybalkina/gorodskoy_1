@@ -66,10 +66,24 @@ C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionP
 
 ## Конфигурация
 
-Пример переменных окружения лежит в `.env.example`. Для локальной разработки по умолчанию используются:
+Пример переменных окружения лежит в `.env.example`. Этот файл попадает в GitHub и должен содержать только заглушки, без реальных логинов, паролей, токенов и секретных ключей. Реальные значения храните только в локальном `.env`.
+
+Для локальной разработки по умолчанию используются:
 
 * `SERVICE_NAME=Городской справочник`
 * `PUBLIC_BASE_URL=http://localhost:8000`
 * `ADS_ENABLED=false`
 
+Импорт Telegram JSON в админке `/admin/imports` включается только после настройки официального источника в локальном `.env`:
+
+```env
+OFFICIAL_TELEGRAM_SOURCE_ID=official_channel_id_or_username
+OFFICIAL_TELEGRAM_SOURCE_NAME=Официальный источник администрации
+OFFICIAL_TELEGRAM_SOURCE_KIND=official_channel
+```
+
+`OFFICIAL_TELEGRAM_SOURCE_ID` должен совпадать с `id`, `username`, `from_id` или другим идентификатором официального источника из стандартной JSON-выгрузки Telegram. Допустимые значения `OFFICIAL_TELEGRAM_SOURCE_KIND`: `official_channel`, `official_bot`, `telegram_bot`, `website`.
+
 Файлы `.env`, базы данных, JSON-выгрузки, экспорты и логи исключены из Git.
+
+Реальные выгрузки Telegram с персональными данными нельзя хранить в репозитории. Для ручной загрузки используйте папку вне проекта, например `C:\Projects\gorodskoy_private\telegram_exports`, или временно кладите файл в `imports/`, который исключен из Git и Docker build context.

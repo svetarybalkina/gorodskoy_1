@@ -22,6 +22,11 @@ logs/*
 *.log
 imports/*.json
 exports/*.json
+ChatExport*/
+Telegram Desktop/
+*.tgs
+*.webp
+*.webm
 
 .DS_Store
 Thumbs.db

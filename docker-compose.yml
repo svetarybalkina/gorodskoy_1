@@ -4,7 +4,10 @@ services:
   app:
     build: .
     env_file:
-      - .env.example
+      - path: .env.example
+        required: true
+      - path: .env
+        required: false
     ports:
       - "8000:8000"
     volumes:

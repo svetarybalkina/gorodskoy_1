@@ -14,6 +14,15 @@ class Settings(BaseSettings):
     public_base_url: str = Field(default="http://localhost:8000", alias="PUBLIC_BASE_URL")
     ads_enabled: bool = Field(default=False, alias="ADS_ENABLED")
     auto_db_bootstrap: bool = Field(default=True, alias="AUTO_DB_BOOTSTRAP")
+    official_telegram_source_id: str = Field(default="", alias="OFFICIAL_TELEGRAM_SOURCE_ID")
+    official_telegram_source_name: str = Field(
+        default="Официальный источник администрации",
+        alias="OFFICIAL_TELEGRAM_SOURCE_NAME",
+    )
+    official_telegram_source_kind: str = Field(
+        default="official_channel",
+        alias="OFFICIAL_TELEGRAM_SOURCE_KIND",
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

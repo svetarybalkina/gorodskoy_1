@@ -1,0 +1,90 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Отчет импорта{% endblock %}
+
+{% block content %}
+<section class="admin-toolbar">
+    <div>
+        <p class="eyebrow">Отчет обработки</p>
+        <h1>Импорт #{{ batch.id }}</h1>
+    </div>
+    <a class="read-more" href="/admin/imports/{{ batch.id }}/report/download">Скачать отчет</a>
+</section>
+
+<section class="admin-detail">
+    <dl class="compact-meta">
+        <div><dt>Файл</dt><dd>{{ batch.filename }}</dd></div>
+        <div><dt>Статус</dt><dd>{{ batch.status|import_status_label }}</dd></div>
+        <div><dt>Всего сообщений</dt><dd>{{ summary.total_messages }}</dd></div>
+        <div><dt>Обработано</dt><dd>{{ summary.processed_messages }}</dd></div>
+        <div><dt>Официальных материалов</dt><dd>{{ summary.official_materials_found }}</dd></div>
+        <div><dt>Ответов</dt><dd>{{ summary.official_answers_found }}</dd></div>
+        <div><dt>Постов</dt><dd>{{ summary.official_posts_found }}</dd></div>
+        <div><dt>Вопросов жителей</dt><dd>{{ summary.resident_questions_found }}</dd></div>
+        <div><dt>Дублей</dt><dd>{{ summary.duplicate_count }}</dd></div>
+        <div><dt>Черновиков</dt><dd>{{ summary.draft_count }}</dd></div>
+        <div><dt>На проверке</dt><dd>{{ summary.needs_review_count }}</dd></div>
+        <div><dt>Обезличивание</dt><dd>{{ summary.anonymization_status }}</dd></div>
+    </dl>
+</section>
+
+<section class="admin-detail">
+    <h2>Найденные материалы</h2>
+    {% if summary.materials %}
+        <div class="admin-list">
+            {% for material in summary.materials %}
+                <article class="admin-row">
+                    <div>
+                        <h3><a href="/admin/materials/{{ material.material_id }}">Карточка #{{ material.material_id }}</a></h3>
+                        <p>Telegram id: {{ material.telegram_message_id }}, тип: {{ material.material_type }}, статус: {{ material.status }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Официальные материалы не найдены.</p>
+    {% endif %}
+</section>
+
+<section class="admin-detail">
+    <h2>Спорные случаи</h2>
+    {% if summary.review_cases %}
+        <div class="admin-list">
+            {% for item in summary.review_cases %}
+                <article class="admin-row">
+                    <div>
+                        <div class="meta">
+                            <span>{{ item.code }}</span>
+                            <span>Сообщение {{ item.message_id or "без id" }}</span>
+                        </div>
+                        <p>{{ item.description }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Спорных случаев нет.</p>
+    {% endif %}
+</section>
+
+<section class="admin-detail">
+    <h2>Ошибки</h2>
+    {% if errors %}
+        <div class="admin-list">
+            {% for item in errors %}
+                <article class="admin-row">
+                    <div>
+                        <div class="meta">
+                            <span>{{ item.code }}</span>
+                            <span>Сообщение {{ item.message_id or "без id" }}</span>
+                        </div>
+                        <p>{{ item.description }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Ошибок нет.</p>
+    {% endif %}
+</section>
+{% endblock %}

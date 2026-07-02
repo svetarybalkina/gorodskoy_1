@@ -1,0 +1,69 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Импорт JSON{% endblock %}
+
+{% block content %}
+<section class="admin-toolbar">
+    <div>
+        <p class="eyebrow">Загрузка Telegram JSON</p>
+        <h1>Импорт</h1>
+    </div>
+</section>
+
+{% if error %}
+    <div class="notice danger">{{ error }}</div>
+{% endif %}
+
+{% if not source_configured %}
+    <div class="notice danger">
+        Импорт отключен: задайте OFFICIAL_TELEGRAM_SOURCE_ID в переменных окружения.
+    </div>
+{% else %}
+    <section class="admin-detail">
+        <h2>Официальный источник</h2>
+        <dl class="compact-meta">
+            <div><dt>ID</dt><dd>{{ official_source_id }}</dd></div>
+            <div><dt>Название</dt><dd>{{ official_source_name }}</dd></div>
+            <div><dt>Тип</dt><dd>{{ official_source_kind|source_kind_label }}</dd></div>
+        </dl>
+    </section>
+{% endif %}
+
+<section class="admin-actions">
+    <h2>Загрузить выгрузку</h2>
+    <form action="/admin/imports" method="post" enctype="multipart/form-data" class="admin-form compact">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+            JSON-файл Telegram
+            <input type="file" name="file" accept="application/json,.json" required {% if not source_configured %}disabled{% endif %}>
+        </label>
+        <button type="submit" {% if not source_configured %}disabled{% endif %}>Загрузить</button>
+    </form>
+</section>
+
+<section class="admin-detail">
+    <h2>Последние импорты</h2>
+    {% if batches %}
+        <div class="admin-list">
+            {% for batch in batches %}
+                <article class="admin-row">
+                    <div>
+                        <div class="meta">
+                            <span class="status-badge">{{ batch.status|import_status_label }}</span>
+                            <span>{{ batch.created_at|date_ru }}</span>
+                            <span>{{ batch.filename }}</span>
+                        </div>
+                        <h3><a href="/admin/imports/{{ batch.id }}">Импорт #{{ batch.id }}</a></h3>
+                        <p>Сообщений: {{ batch.total_messages }}, обработано: {{ batch.processed_messages }}, ошибок: {{ batch.error_count }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <h2>Импортов пока нет</h2>
+            <p>Загрузите стандартную JSON-выгрузку Telegram, чтобы сформировать черновые карточки и отчет.</p>
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

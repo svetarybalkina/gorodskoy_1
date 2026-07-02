@@ -68,6 +68,40 @@ class SourceRepository:
         self.session.flush()
         return source
 
+    def get_by_code(self, code: str) -> Source | None:
+        return self.session.scalar(select(Source).where(Source.code == code))
+
+    def get_or_update_official_telegram_source(
+        self,
+        *,
+        source_id: str,
+        name: str,
+        kind: SourceKind,
+        url: str | None = None,
+    ) -> Source:
+        code = f"telegram:{source_id.strip().lower()}"
+        source = self.get_by_code(code)
+        if source is None:
+            source = Source(
+                code=code,
+                name=name,
+                kind=kind,
+                external_id=source_id,
+                url=url,
+                is_official=True,
+                is_active=True,
+            )
+            self.session.add(source)
+        else:
+            source.name = name
+            source.kind = kind
+            source.external_id = source_id
+            source.url = url
+            source.is_official = True
+            source.is_active = True
+        self.session.flush()
+        return source
+
 
 class TaxonomyRepository:
     def __init__(self, session: Session) -> None:
@@ -489,6 +523,27 @@ class ImportRepository:
         self.session.add(batch)
         self.session.flush()
         return batch
+
+    def list_batches(self, *, limit: int = 50) -> list[ImportBatch]:
+        return list(
+            self.session.scalars(
+                select(ImportBatch).order_by(ImportBatch.created_at.desc(), ImportBatch.id.desc()).limit(limit)
+            )
+        )
+
+    def get_batch(self, batch_id: int) -> ImportBatch | None:
+        return self.session.scalar(
+            select(ImportBatch)
+            .where(ImportBatch.id == batch_id)
+            .options(selectinload(ImportBatch.reports))
+        )
+
+    def get_report_for_batch(self, batch_id: int) -> ImportReport | None:
+        return self.session.scalar(
+            select(ImportReport)
+            .where(ImportReport.import_batch_id == batch_id)
+            .order_by(ImportReport.created_at.desc(), ImportReport.id.desc())
+        )
 
     def create_report(
         self,

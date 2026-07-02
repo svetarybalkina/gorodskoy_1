@@ -16,6 +16,11 @@ logs/*
 *.sqlite
 *.sqlite3
 *.log
+ChatExport*/
+Telegram Desktop/
+*.tgs
+*.webp
+*.webm
 
 .git/
 .gitignore
