@@ -12,7 +12,7 @@ from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.db.enums import MaterialStatus, MaterialType, SourceKind
 from app.db.models import AdminNote, Material
-from app.db.repositories import MaterialRepository, SourceRepository, TaxonomyRepository
+from app.db.repositories import MaterialRepository, ReviewRepository, SourceRepository, TaxonomyRepository
 from app.db.seed import seed_initial_data
 from app.db.session import create_database_engine, get_db_session
 from app.main import create_app
@@ -88,6 +88,32 @@ def seed_admin_materials(session: Session) -> None:
         published_at=datetime(2026, 6, 14, tzinfo=UTC),
         original_text="Оригинальный текст про собак.",
         public_text="Черновая версия про собак.",
+    )
+    review_material = repo.create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=heating.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.NEEDS_REVIEW,
+        published_at=datetime(2026, 6, 13, tzinfo=UTC),
+        original_text="Ответ по обращению АБ-12345 подписал Иванов Иван Иванович.",
+        public_text="Ответ по [номер обращения скрыт] подписал Иванов Иван Иванович.",
+        has_personal_data=True,
+        needs_person_name_review=True,
+    )
+    review_repo = ReviewRepository(session)
+    review_repo.create_redaction_event(
+        material_id=review_material.id,
+        field_name="public_text",
+        redaction_type="appeal_number",
+        original_fragment="обращению АБ-12345",
+        replacement="[номер обращения скрыт]",
+        is_confirmed=True,
+    )
+    review_repo.create_person_name_review(
+        material_id=review_material.id,
+        detected_name="Иванов Иван Иванович",
+        context="Ответ по обращению АБ-12345 подписал Иванов Иван Иванович.",
     )
     session.add(AdminNote(material_id=active.id, body="Внутренняя заметка", author="admin"))
     session.commit()
@@ -191,6 +217,37 @@ def test_admin_material_detail_shows_core_fields_and_notes(
     assert "Официальный канал администрации" in response.text
     assert "Опубликовано" in response.text
     assert "Внутренняя заметка" in response.text
+
+
+def test_admin_reviews_page_shows_pending_materials_and_person_names(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = admin_app_context
+    login(client)
+
+    response = client.get("/admin/reviews")
+
+    assert response.status_code == 200
+    assert "Спорные персональные данные и ФИО" in response.text
+    assert "Иванов Иван Иванович" in response.text
+    assert "[номер обращения скрыт]" in response.text
+
+
+def test_admin_material_detail_shows_redactions_and_person_name_reviews(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    login(client)
+    with session_factory() as session:
+        material_id = session.query(Material).filter_by(status=MaterialStatus.NEEDS_REVIEW).one().id
+
+    response = client.get(f"/admin/materials/{material_id}")
+
+    assert response.status_code == 200
+    assert "Обезличивание" in response.text
+    assert "обращению АБ-12345" in response.text
+    assert "ФИО на проверке" in response.text
+    assert "Иванов Иван Иванович" in response.text
 
 
 @pytest.mark.parametrize(

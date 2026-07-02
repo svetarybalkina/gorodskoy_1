@@ -165,6 +165,7 @@ def test_homepage_contains_search_categories_popular_disclaimer_and_legal_links(
     assert response.text.index("Животные") < response.text.index("Другое")
     assert "Почему нет отопления?" in response.text
     assert "не является официальным ресурсом администрации" in response.text
+    assert "Пожалуйста, не указывайте ФИО, телефон, номер квартиры" in response.text
     assert "/legal/terms" in response.text
     assert "/legal/privacy" in response.text
     assert "/legal/moderation" in response.text
@@ -197,6 +198,7 @@ def test_legal_pages_open_and_contain_required_placeholders(
     assert "[ДОМЕН СЕРВИСА]" in response.text
     assert "[EMAIL ДЛЯ ОБРАЩЕНИЙ]" in response.text
     assert "[КОНТАКТЫ ОПЕРАТОРА]" in response.text
+    assert "До внедрения" not in response.text
 
 
 def test_temporary_search_finds_only_active_official_public_topic_materials(
@@ -345,6 +347,7 @@ def test_not_helpful_creates_problem_query_without_raw_user_text(
 
     assert response.status_code == 200
     assert "Текст вашего запроса не сохранен" in response.text
+    assert "до внедрения" not in response.text.lower()
     with session_factory() as session:
         problem_query = session.query(ProblemQuery).one()
         assert problem_query.anonymized_text == SAFE_PROBLEM_QUERY_TEXT

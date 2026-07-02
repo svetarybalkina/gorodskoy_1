@@ -126,6 +126,12 @@ h2 {
     gap: 10px;
 }
 
+.form-hint {
+    margin: 10px 0 0;
+    color: var(--muted);
+    font-size: 14px;
+}
+
 input[type="search"] {
     width: 100%;
     min-height: 44px;

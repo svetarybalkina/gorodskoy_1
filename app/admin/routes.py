@@ -21,7 +21,13 @@ from app.admin.auth import (
 )
 from app.core.config import Settings, get_settings
 from app.db.enums import ImportStatus, MaterialStatus, MaterialType, SourceKind
-from app.db.repositories import AdminNoteRepository, ImportRepository, MaterialRepository, TaxonomyRepository
+from app.db.repositories import (
+    AdminNoteRepository,
+    ImportRepository,
+    MaterialRepository,
+    ReviewRepository,
+    TaxonomyRepository,
+)
 from app.db.session import get_db_session
 from app.importers.telegram_json import TelegramImportError, TelegramJsonImporter
 
@@ -212,6 +218,24 @@ async def imports_list(
             "official_source_name": settings.official_telegram_source_name,
             "official_source_kind": settings.official_telegram_source_kind,
             "error": None,
+        },
+    )
+
+
+@router.get("/reviews", response_class=HTMLResponse)
+async def reviews_list(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "admin/reviews.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "materials": MaterialRepository(db).list_needs_review(),
+            "person_name_reviews": ReviewRepository(db).list_pending_person_name_reviews(),
         },
     )
 

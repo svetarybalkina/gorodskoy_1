@@ -312,6 +312,25 @@ class MaterialRepository:
                 selectinload(Material.topic),
                 selectinload(Material.category).selectinload(Category.topic),
                 selectinload(Material.admin_notes),
+                selectinload(Material.redaction_events),
+                selectinload(Material.person_name_reviews),
+            )
+        )
+
+    def list_needs_review(self, *, limit: int = 100) -> list[Material]:
+        return list(
+            self.session.scalars(
+                select(Material)
+                .where(Material.status == MaterialStatus.NEEDS_REVIEW)
+                .options(
+                    selectinload(Material.source),
+                    selectinload(Material.topic),
+                    selectinload(Material.category).selectinload(Category.topic),
+                    selectinload(Material.redaction_events),
+                    selectinload(Material.person_name_reviews),
+                )
+                .order_by(Material.published_at.desc(), Material.id.desc())
+                .limit(limit)
             )
         )
 
@@ -607,6 +626,20 @@ class ReviewRepository:
         self.session.add(review)
         self.session.flush()
         return review
+
+    def list_pending_person_name_reviews(self, *, limit: int = 100) -> list[PersonNameReview]:
+        return list(
+            self.session.scalars(
+                select(PersonNameReview)
+                .where(PersonNameReview.status == ReviewStatus.PENDING)
+                .options(
+                    selectinload(PersonNameReview.material).selectinload(Material.source),
+                    selectinload(PersonNameReview.material).selectinload(Material.category),
+                )
+                .order_by(PersonNameReview.created_at.desc(), PersonNameReview.id.desc())
+                .limit(limit)
+            )
+        )
 
 
 class ProblemQueryRepository:

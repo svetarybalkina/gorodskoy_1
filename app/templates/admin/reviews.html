@@ -1,0 +1,63 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Очередь проверки{% endblock %}
+
+{% block content %}
+<section class="admin-toolbar">
+    <div>
+        <p class="eyebrow">Ручная проверка</p>
+        <h1>Спорные персональные данные и ФИО</h1>
+        <p class="muted">На этой странице видны карточки, которые не публикуются автоматически до решения администратора.</p>
+    </div>
+</section>
+
+<section class="admin-detail">
+    <h2>Карточки на проверке</h2>
+    {% if materials %}
+        <div class="admin-list">
+            {% for material in materials %}
+                <article class="admin-row">
+                    <div>
+                        <div class="meta">
+                            <span>Карточка #{{ material.id }}</span>
+                            <span>{{ material.published_at|date_ru }}</span>
+                            <span>{{ material.source.name }}</span>
+                        </div>
+                        <h3><a href="/admin/materials/{{ material.id }}">{{ material.category.name if material.category else material.topic.name }}</a></h3>
+                        <p>{{ material.public_text[:260] }}{% if material.public_text|length > 260 %}...{% endif %}</p>
+                    </div>
+                    <dl class="compact-meta">
+                        <div><dt>Скрытий</dt><dd>{{ material.redaction_events|length }}</dd></div>
+                        <div><dt>ФИО</dt><dd>{{ material.person_name_reviews|length }}</dd></div>
+                        <div><dt>Статус</dt><dd><span class="status-badge status-{{ material.status.value }}">{{ material.status|status_label }}</span></dd></div>
+                    </dl>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Карточек на проверке пока нет.</p>
+    {% endif %}
+</section>
+
+<section class="admin-detail">
+    <h2>ФИО на проверке</h2>
+    {% if person_name_reviews %}
+        <div class="admin-list">
+            {% for review in person_name_reviews %}
+                <article class="admin-row">
+                    <div>
+                        <div class="meta">
+                            <span>Карточка #{{ review.material_id }}</span>
+                            <span>{{ review.status.value }}</span>
+                        </div>
+                        <h3><a href="/admin/materials/{{ review.material_id }}">{{ review.detected_name }}</a></h3>
+                        <p>{{ review.context }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">ФИО на проверке пока нет.</p>
+    {% endif %}
+</section>
+{% endblock %}

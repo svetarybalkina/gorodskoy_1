@@ -57,6 +57,46 @@
         </div>
     </section>
 
+    <section class="admin-actions">
+        <h2>Обезличивание</h2>
+        {% if material.redaction_events %}
+            <div class="admin-list">
+                {% for event in material.redaction_events|sort(attribute="created_at") %}
+                    <article class="note-card">
+                        <div class="meta">
+                            <span>{{ event.redaction_type }}</span>
+                            <span>{{ "подтверждено автоматически" if event.is_confirmed else "требует проверки" }}</span>
+                        </div>
+                        <p><strong>Скрыто:</strong> {{ event.original_fragment }}</p>
+                        <p><strong>Замена:</strong> {{ event.replacement }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="muted">Автоматических скрытий не найдено.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-actions">
+        <h2>ФИО на проверке</h2>
+        {% if material.person_name_reviews %}
+            <div class="admin-list">
+                {% for review in material.person_name_reviews|sort(attribute="created_at") %}
+                    <article class="note-card">
+                        <div class="meta">
+                            <span>{{ review.status.value }}</span>
+                            <span>{{ review.created_at|date_ru }}</span>
+                        </div>
+                        <p><strong>{{ review.detected_name }}</strong></p>
+                        <p>{{ review.context }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+        {% else %}
+            <p class="muted">ФИО на проверке не найдено.</p>
+        {% endif %}
+    </section>
+
     {% if material.source_url %}
         <p class="source-link"><a href="{{ material.source_url }}" rel="noopener noreferrer">Открыть источник</a></p>
     {% endif %}

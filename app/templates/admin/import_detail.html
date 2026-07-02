@@ -24,7 +24,12 @@
         <div><dt>Дублей</dt><dd>{{ summary.duplicate_count }}</dd></div>
         <div><dt>Черновиков</dt><dd>{{ summary.draft_count }}</dd></div>
         <div><dt>На проверке</dt><dd>{{ summary.needs_review_count }}</dd></div>
+        <div><dt>Скрыто персональных данных</dt><dd>{{ summary.redactions_applied }}</dd></div>
+        <div><dt>ФИО на проверке</dt><dd>{{ summary.person_name_reviews_count }}</dd></div>
         <div><dt>Обезличивание</dt><dd>{{ summary.anonymization_status }}</dd></div>
+        {% if batch.anonymized_file_path %}
+            <div><dt>Обезличенная копия</dt><dd>{{ batch.anonymized_file_path }}</dd></div>
+        {% endif %}
     </dl>
 </section>
 

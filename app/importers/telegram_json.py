@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,8 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.db.enums import ImportStatus, MaterialStatus, MaterialType, SourceKind
 from app.db.models import Material
-from app.db.repositories import ImportRepository, MaterialRepository, SourceRepository, TaxonomyRepository
+from app.db.repositories import ImportRepository, MaterialRepository, ReviewRepository, SourceRepository, TaxonomyRepository
+from app.services.anonymization import AnonymizationResult, anonymize_text
 
 
 class TelegramImportError(ValueError):
@@ -52,6 +54,7 @@ class ImportReportBuilder:
     draft_count: int = 0
     needs_review_count: int = 0
     redactions_applied: int = 0
+    person_name_reviews_count: int = 0
     errors: list[dict[str, Any]] = field(default_factory=list)
     materials: list[dict[str, Any]] = field(default_factory=list)
     review_cases: list[dict[str, Any]] = field(default_factory=list)
@@ -103,7 +106,8 @@ class ImportReportBuilder:
             "draft_count": self.draft_count,
             "needs_review_count": self.needs_review_count,
             "redactions_applied": self.redactions_applied,
-            "anonymization_status": "pending_task_7",
+            "person_name_reviews_count": self.person_name_reviews_count,
+            "anonymization_status": "completed",
             "materials": self.materials,
             "review_cases": self.review_cases,
         }
@@ -153,7 +157,9 @@ class TelegramJsonImporter:
         builder = ImportReportBuilder()
         try:
             payload = parse_telegram_export(content)
+            anonymized_payload = deepcopy(payload)
             messages = payload["messages"]
+            anonymized_messages = anonymized_payload.get("messages", [])
             export_identifiers = extract_export_identifiers(payload)
             builder.total_messages = len(messages)
             for index, raw_message in enumerate(messages):
@@ -180,11 +186,18 @@ class TelegramJsonImporter:
                         )
                         continue
                     builder.processed_messages += 1
+                    anonymization = anonymize_text(parsed.text)
+                    builder.redactions_applied += len(anonymization.redactions)
+                    if isinstance(anonymized_messages, list) and index < len(anonymized_messages):
+                        anonymized_message = anonymized_messages[index]
+                        if isinstance(anonymized_message, dict):
+                            anonymized_message["text"] = anonymization.text
                     if identifiers_match(parsed.source_identifiers, source_id):
                         self._create_material(
                             source_id=source.id,
                             source_kind=source_kind,
                             message=parsed,
+                            anonymization=anonymization,
                             batch_id=batch.id,
                             builder=builder,
                         )
@@ -200,6 +213,7 @@ class TelegramJsonImporter:
             batch.status = ImportStatus.COMPLETED_WITH_ERRORS if builder.errors else ImportStatus.COMPLETED
         except TelegramImportError as exc:
             batch.status = ImportStatus.FAILED
+            anonymized_payload = None
             builder.add_error(index=None, message_id=None, code="invalid_export", description=str(exc))
 
         batch.total_messages = builder.total_messages
@@ -207,12 +221,20 @@ class TelegramJsonImporter:
         batch.error_count = len(builder.errors)
         batch.finished_at = datetime.now(UTC)
         summary = builder.summary()
+        anonymized_path = self.exports_dir / f"{token}_anonymized.json"
+        if anonymized_payload is not None:
+            anonymized_path.write_text(
+                json.dumps(anonymized_payload, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            batch.anonymized_file_path = anonymized_path.as_posix()
         report_path = self.exports_dir / f"{token}_report.json"
         report_body = {
             "batch_id": batch.id,
             "filename": safe_filename,
             "source_id": source.external_id,
             "source_name": source.name,
+            "anonymized_file_path": batch.anonymized_file_path,
             "summary": summary,
             "errors": builder.errors,
         }
@@ -240,6 +262,7 @@ class TelegramJsonImporter:
         source_id: int,
         source_kind: SourceKind,
         message: TelegramMessage,
+        anonymization: AnonymizationResult,
         batch_id: int,
         builder: ImportReportBuilder,
     ) -> None:
@@ -275,6 +298,7 @@ class TelegramJsonImporter:
             if source_kind in {SourceKind.OFFICIAL_BOT, SourceKind.TELEGRAM_BOT}
             else MaterialType.OFFICIAL_POST
         )
+        status = MaterialStatus.NEEDS_REVIEW if anonymization.needs_review else MaterialStatus.DRAFT
         material = MaterialRepository(self.session).create(
             source_id=source_id,
             topic_id=topic.id,
@@ -282,18 +306,55 @@ class TelegramJsonImporter:
             import_batch_id=batch_id,
             external_message_id=message.message_id,
             material_type=material_type,
-            status=MaterialStatus.DRAFT,
+            status=status,
             published_at=message.date,
             original_text=message.text,
-            public_text=message.text,
+            public_text=anonymization.text,
+            has_personal_data=anonymization.has_personal_data,
+            needs_person_name_review=bool(anonymization.person_names),
             is_official=True,
             metadata_json={
                 "telegram_source_identifiers": sorted(message.source_identifiers),
-                "anonymization_status": "pending_task_7",
+                "anonymization_status": "completed",
+                "review_cases": [case.code for case in anonymization.review_cases],
             },
         )
+        review_repo = ReviewRepository(self.session)
+        for redaction in anonymization.redactions:
+            review_repo.create_redaction_event(
+                material_id=material.id,
+                field_name="public_text",
+                redaction_type=redaction.redaction_type,
+                original_fragment=redaction.original_fragment,
+                replacement=redaction.replacement,
+                is_confirmed=not redaction.needs_review,
+            )
+        for person_name in anonymization.person_names:
+            review_repo.create_person_name_review(
+                material_id=material.id,
+                detected_name=person_name.detected_name,
+                context=person_name.context,
+            )
+            builder.person_name_reviews_count += 1
+        for review_case in anonymization.review_cases:
+            builder.add_review_case(
+                index=message.index,
+                message_id=message.message_id,
+                code=review_case.code,
+                description=review_case.description,
+            )
+        for person_name in anonymization.person_names:
+            builder.add_review_case(
+                index=message.index,
+                message_id=message.message_id,
+                code="person_name_review",
+                description=f"ФИО отправлено на ручную проверку: {person_name.detected_name}.",
+            )
         builder.official_materials_found += 1
-        builder.draft_count += 1
+        if status == MaterialStatus.NEEDS_REVIEW:
+            builder.needs_review_count += 1
+        else:
+            builder.draft_count += 1
         if material_type == MaterialType.OFFICIAL_ANSWER:
             builder.official_answers_found += 1
         else:
@@ -307,6 +368,8 @@ class TelegramJsonImporter:
                 "status": material.status.value,
                 "topic": topic.slug,
                 "category": category.slug if category else None,
+                "redactions_applied": len(anonymization.redactions),
+                "person_name_reviews": len(anonymization.person_names),
             }
         )
 
