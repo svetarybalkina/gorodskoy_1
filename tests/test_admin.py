@@ -10,12 +10,33 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
-from app.db.enums import MaterialStatus, MaterialType, SourceKind
-from app.db.models import AdminNote, Material
-from app.db.repositories import MaterialRepository, ReviewRepository, SourceRepository, TaxonomyRepository
+from app.db.enums import (
+    DictionaryCandidateSource,
+    DictionaryCandidateStatus,
+    DictionaryCandidateType,
+    LinkReason,
+    MaterialStatus,
+    MaterialType,
+    ProblemQueryAction,
+    ProblemQueryChannel,
+    SourceKind,
+)
+from app.db.models import AdminNote, DictionaryCandidate, Material, ProblemQuery
+from app.db.repositories import (
+    DictionaryCandidateRepository,
+    ImportRepository,
+    MaterialRepository,
+    ProblemQueryRepository,
+    QuestionRepository,
+    ReviewRepository,
+    SourceRepository,
+    TaxonomyRepository,
+)
 from app.db.seed import seed_initial_data
 from app.db.session import create_database_engine, get_db_session
 from app.main import create_app
+from app.search.normalization import normalize_text
+from app.search.service import SearchService
 
 
 @pytest.fixture()
@@ -358,3 +379,248 @@ def test_admin_can_change_category_and_add_internal_note_not_visible_publicly(
     public_response = client.get(f"/materials/{material_id}")
     assert public_response.status_code == 200
     assert "Новая внутренняя заметка" not in public_response.text
+
+
+def test_admin_marks_and_permanently_deletes_material_with_dependencies(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        material = session.query(Material).filter_by(status=MaterialStatus.ACTIVE).one()
+        material_id = material.id
+        question = QuestionRepository(session).create_resident_question(
+            anonymized_text="Когда дадут отопление?",
+            normalized_text=normalize_text("Когда дадут отопление?"),
+            category_id=material.category_id,
+        )
+        QuestionRepository(session).link_to_material(
+            question_id=question.id,
+            material_id=material_id,
+            reason=LinkReason.ADMIN_CONFIRMED,
+        )
+        QuestionRepository(session).create_variant(
+            material_id=material_id,
+            text="холодные батареи",
+            normalized_text=normalize_text("холодные батареи"),
+            is_confirmed=True,
+        )
+        ProblemQueryRepository(session).create(
+            anonymized_text="не помогло",
+            channel=ProblemQueryChannel.WEBSITE,
+            shown_material_id=material_id,
+            similar_material_ids=[material_id],
+            user_action=ProblemQueryAction.REPHRASE,
+        )
+        DictionaryCandidateRepository(session).create_or_increment(
+            text="батареи еле теплые",
+            normalized_text=normalize_text("батареи еле теплые"),
+            candidate_type=DictionaryCandidateType.QUESTION_VARIANT,
+            source=DictionaryCandidateSource.SEARCH,
+            category_id=material.category_id,
+            material_id=material_id,
+        )
+        SearchService(session).rebuild_index()
+        session.commit()
+
+    mark_response = client.post(
+        f"/admin/materials/{material_id}/delete/mark",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+    assert mark_response.status_code == 303
+    public_response = client.get("/search?q=отопление")
+    assert "Публичная версия про отопление." not in public_response.text
+
+    bad_final = client.post(
+        f"/admin/materials/{material_id}/delete/final",
+        data={"csrf_token": csrf_token, "confirmation": "удалить"},
+        follow_redirects=False,
+    )
+    assert bad_final.status_code == 400
+
+    final_response = client.post(
+        f"/admin/materials/{material_id}/delete/final",
+        data={"csrf_token": csrf_token, "confirmation": f"УДАЛИТЬ #{material_id}"},
+        follow_redirects=False,
+    )
+    assert final_response.status_code == 303
+    with session_factory() as session:
+        assert session.get(Material, material_id) is None
+        assert session.query(DictionaryCandidate).filter_by(material_id=material_id).count() == 0
+        problem_query = session.query(ProblemQuery).filter_by(anonymized_text="не помогло").one()
+        assert problem_query.shown_material_id is None
+        assert problem_query.similar_material_ids == []
+        assert SearchService(session).search_public("отопление", record_problem_query=False).materials == []
+
+
+def test_delete_actions_require_csrf(admin_app_context: tuple[TestClient, sessionmaker[Session]]) -> None:
+    client, session_factory = admin_app_context
+    login(client)
+    with session_factory() as session:
+        material_id = session.query(Material).filter_by(status=MaterialStatus.ACTIVE).one().id
+
+    response = client.post(f"/admin/materials/{material_id}/delete/mark")
+
+    assert response.status_code == 403
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.ACTIVE
+
+
+def test_admin_person_name_review_actions_update_text_flags_and_status(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        review_material = session.query(Material).filter_by(status=MaterialStatus.NEEDS_REVIEW).one()
+        review_id = review_material.person_name_reviews[0].id
+        material_id = review_material.id
+
+    redact_response = client.post(
+        f"/admin/person-name-reviews/{review_id}/redact",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert redact_response.status_code == 303
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert "Иванов Иван Иванович" not in material.public_text
+        assert "[ФИО скрыто]" in material.public_text
+        assert material.needs_person_name_review is False
+
+    with session_factory() as session:
+        review_repo = ReviewRepository(session)
+        review = review_repo.create_person_name_review(
+            material_id=material_id,
+            detected_name="Петров Петр Петрович",
+            context="Подписал Петров Петр Петрович.",
+        )
+        material = session.get(Material, material_id)
+        assert material is not None
+        material.needs_person_name_review = True
+        session.commit()
+        second_review_id = review.id
+
+    hide_response = client.post(
+        f"/admin/person-name-reviews/{second_review_id}/hide-material",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert hide_response.status_code == 303
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.HIDDEN
+
+
+def test_admin_can_create_category_and_confirm_category_candidate(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        housing = TaxonomyRepository(session).get_topic_by_slug("housing")
+        assert housing is not None
+        housing_id = housing.id
+
+    create_response = client.post(
+        "/admin/categories",
+        data={
+            "csrf_token": csrf_token,
+            "topic_id": str(housing_id),
+            "slug": "lifts",
+            "name": "Лифты",
+            "sort_order": "75",
+            "is_public": "on",
+            "is_confirmed": "on",
+        },
+        follow_redirects=False,
+    )
+    page = client.get("/admin/categories")
+
+    assert create_response.status_code == 303
+    assert page.status_code == 200
+    assert "Лифты" in page.text
+    public_page = client.get("/")
+    assert "Лифты" in public_page.text
+
+    candidate_response = client.post(
+        "/admin/search-quality/candidates/category",
+        data={"csrf_token": csrf_token, "text": "Парковки"},
+        follow_redirects=False,
+    )
+    assert candidate_response.status_code == 303
+    with session_factory() as session:
+        candidate = session.query(DictionaryCandidate).filter_by(text="Парковки").one()
+        assert candidate.status == DictionaryCandidateStatus.PENDING
+        candidate_id = candidate.id
+    before_public = client.get("/")
+    assert "Парковки" not in before_public.text
+
+    approve_response = client.post(
+        f"/admin/search-quality/candidates/{candidate_id}/approve",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert approve_response.status_code == 303
+    after_public = client.get("/")
+    assert "Парковки" in after_public.text
+
+
+def test_reprocess_material_and_import_batch_without_autopublishing(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        material = session.query(Material).filter_by(status=MaterialStatus.DRAFT).one()
+        material.original_text = "Ответ по обращению АБ-999 подписал Сидоров Сидор Сидорович."
+        material.public_text = material.original_text
+        session.commit()
+        material_id = material.id
+
+    response = client.post(
+        f"/admin/materials/{material_id}/reprocess",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.NEEDS_REVIEW
+        assert "АБ-999" not in material.public_text
+        assert material.needs_person_name_review is True
+
+    with session_factory() as session:
+        batch = ImportRepository(session).create_batch(filename="repeat.json")
+        material = session.get(Material, material_id)
+        assert material is not None
+        material.status = MaterialStatus.DRAFT
+        material.import_batch_id = batch.id
+        material.original_text = "Официальный текст без персональных данных."
+        material.public_text = "старый текст"
+        material.needs_person_name_review = False
+        session.commit()
+        batch_id = batch.id
+
+    batch_response = client.post(
+        f"/admin/imports/{batch_id}/reprocess",
+        data={"csrf_token": csrf_token},
+        follow_redirects=False,
+    )
+
+    assert batch_response.status_code == 303
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.DRAFT
+        assert material.public_text == "Официальный текст без персональных данных."

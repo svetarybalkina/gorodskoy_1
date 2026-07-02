@@ -60,6 +60,7 @@ class DictionaryCandidateType(StrEnum):
     MARKER = "marker"
     SYNONYM = "synonym"
     QUESTION_VARIANT = "question_variant"
+    CATEGORY = "category"
 
 
 class DictionaryCandidateSource(StrEnum):

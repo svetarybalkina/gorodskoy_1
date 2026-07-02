@@ -10,6 +10,12 @@
 
 <section class="admin-section">
     <h2>Кандидаты словаря</h2>
+    <form method="post" action="/admin/search-quality/candidates/category" class="admin-form compact">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="category-candidate-text">Кандидат новой категории</label>
+        <input id="category-candidate-text" name="text" placeholder="Например: лифты">
+        <button type="submit">Добавить кандидата</button>
+    </form>
     <form method="get" action="/admin/search-quality" class="filter-form">
         <label for="candidate_status">Статус</label>
         <select id="candidate_status" name="candidate_status">

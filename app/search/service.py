@@ -167,7 +167,9 @@ class SearchService:
         candidate = repo.approve(candidate_id)
         if candidate is None:
             return None
-        if candidate.candidate_type == DictionaryCandidateType.QUESTION_VARIANT and candidate.material_id:
+        if candidate.candidate_type == DictionaryCandidateType.CATEGORY:
+            self._approve_category_candidate(candidate)
+        elif candidate.candidate_type == DictionaryCandidateType.QUESTION_VARIANT and candidate.material_id:
             variant = self.session.scalar(
                 select(QuestionVariant).where(
                     QuestionVariant.material_id == candidate.material_id,
@@ -192,6 +194,36 @@ class SearchService:
 
     def reject_candidate(self, candidate_id: int) -> DictionaryCandidate | None:
         return DictionaryCandidateRepository(self.session).reject(candidate_id)
+
+    def _approve_category_candidate(self, candidate: DictionaryCandidate) -> None:
+        taxonomy = TaxonomyRepository(self.session)
+        if candidate.category_id is not None:
+            category = self.session.get(Category, candidate.category_id)
+            if category is not None:
+                category.is_confirmed = True
+                category.is_public = True
+                self.session.flush()
+            return
+
+        topic = taxonomy.get_topic_by_slug("housing")
+        if topic is None:
+            return
+        slug = f"category-{candidate.id}"
+        category = taxonomy.get_category_by_slug(topic_id=topic.id, slug=slug)
+        if category is None:
+            category = taxonomy.create_category(
+                topic_id=topic.id,
+                slug=slug,
+                name=candidate.text.strip() or f"Категория {candidate.id}",
+                is_public=True,
+                is_confirmed=True,
+                sort_order=100,
+            )
+        else:
+            category.is_public = True
+            category.is_confirmed = True
+        candidate.category_id = category.id
+        self.session.flush()
 
     def _ensure_index(self) -> None:
         self.session.execute(

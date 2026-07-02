@@ -7,8 +7,17 @@
     <div>
         <p class="eyebrow">Отчет обработки</p>
         <h1>Импорт #{{ batch.id }}</h1>
+        {% if reprocess_result %}
+            <p class="muted">Повторная обработка выполнена: {{ reprocess_result }}</p>
+        {% endif %}
     </div>
-    <a class="read-more" href="/admin/imports/{{ batch.id }}/report/download">Скачать отчет</a>
+    <div class="table-actions">
+        <form class="inline-form" action="/admin/imports/{{ batch.id }}/reprocess" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Повторно обработать партию</button>
+        </form>
+        <a class="read-more" href="/admin/imports/{{ batch.id }}/report/download">Скачать отчет</a>
+    </div>
 </section>
 
 <section class="admin-detail">

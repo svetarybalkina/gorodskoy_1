@@ -6,6 +6,9 @@
 <article class="admin-detail">
     <p class="eyebrow">Карточка #{{ material.id }}</p>
     <h1>{{ material.category.name if material.category else material.topic.name }}</h1>
+    {% if reprocess_result %}
+        <p class="muted">Повторная обработка выполнена: {{ reprocess_result }}</p>
+    {% endif %}
 
     <dl class="material-meta">
         <div><dt>Статус</dt><dd><span class="status-badge status-{{ material.status.value }}">{{ material.status|status_label }}</span></dd></div>
@@ -29,6 +32,10 @@
                 </form>
             {% endfor %}
         </div>
+        <form action="/admin/materials/{{ material.id }}/reprocess" method="post" class="admin-form compact">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit">Повторно обработать карточку</button>
+        </form>
     </section>
 
     <section class="admin-actions">
@@ -89,11 +96,57 @@
                         </div>
                         <p><strong>{{ review.detected_name }}</strong></p>
                         <p>{{ review.context }}</p>
+                        {% if review.status.value == "pending" %}
+                            <div class="table-actions">
+                                <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/approve" method="post">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit">Официальный сотрудник</button>
+                                </form>
+                                <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/redact" method="post">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit">Скрыть ФИО</button>
+                                </form>
+                                <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/hide-material" method="post">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit">Скрыть карточку</button>
+                                </form>
+                            </div>
+                        {% endif %}
                     </article>
                 {% endfor %}
             </div>
         {% else %}
             <p class="muted">ФИО на проверке не найдено.</p>
+        {% endif %}
+    </section>
+
+    <section class="admin-actions danger-zone">
+        <h2>Удаление карточки</h2>
+        {% if delete_preview %}
+            <p class="muted">Перед окончательным удалением карточка должна быть помечена на удаление.</p>
+            <dl class="compact-meta">
+                <div><dt>Заметки</dt><dd>{{ delete_preview.admin_notes }}</dd></div>
+                <div><dt>Варианты вопросов</dt><dd>{{ delete_preview.question_variants }}</dd></div>
+                <div><dt>Связи с вопросами</dt><dd>{{ delete_preview.question_links }}</dd></div>
+                <div><dt>Скрытия</dt><dd>{{ delete_preview.redaction_events }}</dd></div>
+                <div><dt>ФИО-проверки</dt><dd>{{ delete_preview.person_name_reviews }}</dd></div>
+                <div><dt>Кандидаты словаря</dt><dd>{{ delete_preview.dictionary_candidates }}</dd></div>
+                <div><dt>Проблемные запросы к отвязке</dt><dd>{{ delete_preview.problem_queries_to_unlink }}</dd></div>
+                <div><dt>Записи поиска</dt><dd>{{ delete_preview.search_index_rows }}</dd></div>
+            </dl>
+        {% endif %}
+        {% if material.status.value != "pending_delete" %}
+            <form action="/admin/materials/{{ material.id }}/delete/mark" method="post" class="admin-form compact">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit">Пометить на удаление</button>
+            </form>
+        {% else %}
+            <form action="/admin/materials/{{ material.id }}/delete/final" method="post" class="admin-form compact">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label for="confirmation">Для окончательного удаления введите: УДАЛИТЬ #{{ material.id }}</label>
+                <input id="confirmation" name="confirmation" required>
+                <button type="submit">Удалить окончательно</button>
+            </form>
         {% endif %}
     </section>
 

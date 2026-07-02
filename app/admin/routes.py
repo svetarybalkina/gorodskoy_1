@@ -41,6 +41,10 @@ from app.db.repositories import (
 from app.db.session import get_db_session
 from app.importers.telegram_json import TelegramImportError, TelegramJsonImporter
 from app.search import SearchService
+from app.search.normalization import normalize_text
+from app.services.material_deletion import MaterialDeletionService
+from app.services.person_reviews import PersonNameReviewService
+from app.services.reprocessing import MaterialReprocessingService
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
@@ -106,6 +110,7 @@ def dictionary_candidate_type_label(type_value: DictionaryCandidateType | str) -
         DictionaryCandidateType.MARKER: "Маркер",
         DictionaryCandidateType.SYNONYM: "Синоним",
         DictionaryCandidateType.QUESTION_VARIANT: "Вариант формулировки",
+        DictionaryCandidateType.CATEGORY: "Категория",
     }[type_item]
 
 
@@ -164,6 +169,10 @@ def parse_candidate_status(value: str | None) -> DictionaryCandidateStatus | Non
         return DictionaryCandidateStatus(value)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unknown candidate status") from exc
+
+
+def parse_bool_form(value: str | None) -> bool:
+    return value in {"1", "true", "on", "yes"}
 
 
 async def read_urlencoded_form(request: Request) -> dict[str, str]:
@@ -310,6 +319,27 @@ async def search_quality(
     )
 
 
+@router.get("/categories", response_class=HTMLResponse)
+async def categories_list(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    taxonomy = TaxonomyRepository(db)
+    topic_id = parse_optional_int(request.query_params.get("topic_id"), field_name="topic_id")
+    return templates.TemplateResponse(
+        request,
+        "admin/categories.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "topics": taxonomy.list_admin_topics(),
+            "categories": taxonomy.list_admin_categories(topic_id=topic_id),
+            "selected_topic_id": topic_id,
+        },
+    )
+
+
 @router.post("/imports", response_class=HTMLResponse)
 async def imports_upload(
     request: Request,
@@ -372,6 +402,7 @@ async def import_detail(
             "report": report,
             "summary": report.summary,
             "errors": report.errors,
+            "reprocess_result": request.query_params.get("reprocess_result"),
         },
     )
 
@@ -407,6 +438,7 @@ async def material_detail(
     if material is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     categories = TaxonomyRepository(db).list_admin_categories(topic_id=material.topic_id)
+    delete_preview = MaterialDeletionService(db).preview(material_id)
     return templates.TemplateResponse(
         request,
         "admin/material.html",
@@ -414,6 +446,8 @@ async def material_detail(
             **admin_template_context(request, settings, admin_user),
             "material": material,
             "categories": categories,
+            "delete_preview": delete_preview,
+            "reprocess_result": request.query_params.get("reprocess_result"),
         },
     )
 
@@ -459,6 +493,132 @@ async def update_material_category(
     return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
 
 
+@router.post("/materials/{material_id}/reprocess")
+async def reprocess_material(
+    request: Request,
+    material_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    result = MaterialReprocessingService(db).reprocess_material(material_id)
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.commit()
+    return RedirectResponse(
+        f"/admin/materials/{material_id}?reprocess_result={result.redactions}-{result.person_name_reviews}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/imports/{batch_id}/reprocess")
+async def reprocess_import_batch(
+    request: Request,
+    batch_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    if ImportRepository(db).get_batch(batch_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    result = MaterialReprocessingService(db).reprocess_import_batch(batch_id)
+    db.commit()
+    return RedirectResponse(
+        f"/admin/imports/{batch_id}?reprocess_result={result.processed}-{result.needs_review}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+@router.post("/materials/{material_id}/delete/mark")
+async def mark_material_pending_delete(
+    request: Request,
+    material_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    material = MaterialDeletionService(db).mark_pending_delete(material_id)
+    if material is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.commit()
+    return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/materials/{material_id}/delete/final")
+async def delete_material_permanently(
+    request: Request,
+    material_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    if form.get("confirmation", "").strip() != f"УДАЛИТЬ #{material_id}":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid delete confirmation")
+    try:
+        deleted = MaterialDeletionService(db).delete_permanently(material_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    db.commit()
+    return RedirectResponse("/admin/materials", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/person-name-reviews/{review_id}/approve")
+async def approve_person_name(
+    request: Request,
+    review_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    review = PersonNameReviewService(db).approve_public(review_id)
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    material_id = review.material_id
+    db.commit()
+    return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/person-name-reviews/{review_id}/redact")
+async def redact_person_name(
+    request: Request,
+    review_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    review = PersonNameReviewService(db).redact_name(review_id)
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    material_id = review.material_id
+    db.commit()
+    return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/person-name-reviews/{review_id}/hide-material")
+async def hide_material_after_person_name_review(
+    request: Request,
+    review_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    review = PersonNameReviewService(db).hide_material(review_id)
+    if review is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    material_id = review.material_id
+    db.commit()
+    return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
 @router.post("/search-quality/candidates/{candidate_id}/approve")
 async def approve_dictionary_candidate(
     request: Request,
@@ -489,6 +649,83 @@ async def reject_dictionary_candidate(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
     db.commit()
     return RedirectResponse("/admin/search-quality", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/search-quality/candidates/category")
+async def create_category_candidate(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    text = form.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate text is required")
+    DictionaryCandidateRepository(db).create_or_increment(
+        text=text,
+        normalized_text=normalize_text(text) or text.lower(),
+        candidate_type=DictionaryCandidateType.CATEGORY,
+        source=DictionaryCandidateSource.SEARCH,
+    )
+    db.commit()
+    return RedirectResponse("/admin/search-quality", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/categories")
+async def create_category(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    topic_id = parse_optional_int(form.get("topic_id"), field_name="topic_id")
+    slug = form.get("slug", "").strip().lower()
+    name = form.get("name", "").strip()
+    sort_order = parse_optional_int(form.get("sort_order"), field_name="sort_order") or 100
+    if topic_id is None or not slug or not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Topic, slug and name are required")
+    taxonomy = TaxonomyRepository(db)
+    if taxonomy.get_category_by_slug(topic_id=topic_id, slug=slug) is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category slug already exists")
+    taxonomy.create_category(
+        topic_id=topic_id,
+        slug=slug,
+        name=name,
+        is_public=parse_bool_form(form.get("is_public")),
+        is_confirmed=parse_bool_form(form.get("is_confirmed")),
+        sort_order=sort_order,
+    )
+    db.commit()
+    return RedirectResponse("/admin/categories", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/categories/{category_id}")
+async def update_category(
+    request: Request,
+    category_id: int,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    name = form.get("name", "").strip()
+    sort_order = parse_optional_int(form.get("sort_order"), field_name="sort_order") or 100
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name is required")
+    category = TaxonomyRepository(db).update_category(
+        category_id,
+        name=name,
+        is_public=parse_bool_form(form.get("is_public")),
+        is_confirmed=parse_bool_form(form.get("is_confirmed")),
+        sort_order=sort_order,
+    )
+    if category is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    SearchService(db).rebuild_index()
+    db.commit()
+    return RedirectResponse("/admin/categories", status_code=status.HTTP_303_SEE_OTHER)
 
 
 @router.post("/materials/{material_id}/notes")

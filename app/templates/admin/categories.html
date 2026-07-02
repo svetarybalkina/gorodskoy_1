@@ -1,0 +1,83 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Категории{% endblock %}
+
+{% block content %}
+<section class="admin-section">
+    <h1>Категории</h1>
+    <p class="muted">Подтвержденные публичные категории появляются на сайте и участвуют в фильтрах поиска.</p>
+</section>
+
+<section class="admin-detail">
+    <h2>Новая категория</h2>
+    <form action="/admin/categories" method="post" class="admin-form compact">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="topic_id">Тема</label>
+        <select id="topic_id" name="topic_id" required>
+            {% for topic in topics %}
+                <option value="{{ topic.id }}" {% if topic.slug == "housing" %}selected{% endif %}>{{ topic.name }}</option>
+            {% endfor %}
+        </select>
+        <label for="slug">Slug</label>
+        <input id="slug" name="slug" required placeholder="lifts">
+        <label for="name">Название</label>
+        <input id="name" name="name" required placeholder="Лифты">
+        <label for="sort_order">Порядок</label>
+        <input id="sort_order" name="sort_order" value="100">
+        <label><input type="checkbox" name="is_public" checked> Публичная</label>
+        <label><input type="checkbox" name="is_confirmed" checked> Подтверждена</label>
+        <button type="submit">Создать категорию</button>
+    </form>
+</section>
+
+<section class="admin-detail">
+    <h2>Список категорий</h2>
+    <form method="get" action="/admin/categories" class="filter-form">
+        <label for="filter_topic_id">Тема</label>
+        <select id="filter_topic_id" name="topic_id">
+            <option value="">Все</option>
+            {% for topic in topics %}
+                <option value="{{ topic.id }}" {% if selected_topic_id == topic.id %}selected{% endif %}>{{ topic.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit">Показать</button>
+    </form>
+    {% if categories %}
+        <div class="admin-table-wrap">
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>Тема</th>
+                        <th>Slug</th>
+                        <th>Название</th>
+                        <th>Публичная</th>
+                        <th>Подтверждена</th>
+                        <th>Порядок</th>
+                        <th>Действие</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for category in categories %}
+                        <tr>
+                            <td>
+                                {{ category.topic.name }}
+                                <form id="category-form-{{ category.id }}" action="/admin/categories/{{ category.id }}" method="post">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                </form>
+                            </td>
+                            <td>{{ category.slug }}</td>
+                            <td><input form="category-form-{{ category.id }}" name="name" value="{{ category.name }}" required></td>
+                            <td><input form="category-form-{{ category.id }}" type="checkbox" name="is_public" {% if category.is_public %}checked{% endif %}></td>
+                            <td><input form="category-form-{{ category.id }}" type="checkbox" name="is_confirmed" {% if category.is_confirmed %}checked{% endif %}></td>
+                            <td><input form="category-form-{{ category.id }}" name="sort_order" value="{{ category.sort_order }}"></td>
+                            <td><button form="category-form-{{ category.id }}" type="submit">Сохранить</button></td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <p class="muted">Категорий пока нет.</p>
+    {% endif %}
+</section>
+{% endblock %}

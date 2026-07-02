@@ -222,6 +222,31 @@ class TaxonomyRepository:
         self.session.flush()
         return category
 
+    def get_category_by_id(self, category_id: int) -> Category | None:
+        return self.session.get(Category, category_id)
+
+    def get_category_by_slug(self, *, topic_id: int, slug: str) -> Category | None:
+        return self.get_category(topic_id=topic_id, slug=slug)
+
+    def update_category(
+        self,
+        category_id: int,
+        *,
+        name: str,
+        is_public: bool,
+        is_confirmed: bool,
+        sort_order: int,
+    ) -> Category | None:
+        category = self.session.get(Category, category_id)
+        if category is None:
+            return None
+        category.name = name
+        category.is_public = is_public
+        category.is_confirmed = is_confirmed
+        category.sort_order = sort_order
+        self.session.flush()
+        return category
+
 
 class MaterialRepository:
     def __init__(self, session: Session) -> None:
@@ -643,6 +668,13 @@ class ReviewRepository:
                 .order_by(PersonNameReview.created_at.desc(), PersonNameReview.id.desc())
                 .limit(limit)
             )
+        )
+
+    def get_person_name_review(self, review_id: int) -> PersonNameReview | None:
+        return self.session.scalar(
+            select(PersonNameReview)
+            .where(PersonNameReview.id == review_id)
+            .options(selectinload(PersonNameReview.material).selectinload(Material.person_name_reviews))
         )
 
 

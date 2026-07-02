@@ -52,6 +52,20 @@
                         </div>
                         <h3><a href="/admin/materials/{{ review.material_id }}">{{ review.detected_name }}</a></h3>
                         <p>{{ review.context }}</p>
+                        <div class="table-actions">
+                            <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/approve" method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit">Официальный сотрудник</button>
+                            </form>
+                            <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/redact" method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit">Скрыть ФИО</button>
+                            </form>
+                            <form class="inline-form" action="/admin/person-name-reviews/{{ review.id }}/hide-material" method="post">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit">Скрыть карточку</button>
+                            </form>
+                        </div>
                     </div>
                 </article>
             {% endfor %}
