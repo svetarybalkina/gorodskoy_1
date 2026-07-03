@@ -15,6 +15,7 @@ from app.db.models import Category, Material
 from app.db.repositories import MaterialRepository, TaxonomyRepository
 from app.db.session import get_db_session
 from app.search import SearchService
+from app.services.recommendations import RecommendationExtractionService
 
 
 router = APIRouter(tags=["public"])
@@ -281,7 +282,9 @@ async def search(
             "query": q.strip(),
             "categories": taxonomy.list_public_categories(),
             "selected_category": selected_category,
+            "search_items": search_response.items,
             "materials": search_response.materials,
+            "recommendations": search_response.recommendations,
             "match_level": search_response.match_level,
             "problem_query_saved": search_response.problem_query_saved,
         },
@@ -301,12 +304,14 @@ async def material_detail(
         raise HTTPException(status_code=404, detail="Material not found")
 
     similar_materials = materials.list_similar_public(material)
+    recommendations = RecommendationExtractionService(db).list_for_material(material.id)
     return templates.TemplateResponse(
         request,
         "public/material.html",
         {
             **public_context(settings),
             "material": material,
+            "recommendations": recommendations,
             "similar_materials": similar_materials,
             "query": request.query_params.get("q", "").strip(),
         },

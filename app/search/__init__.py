@@ -1,4 +1,4 @@
 """Search package."""
-from app.search.service import SearchItem, SearchResponse, SearchService
+from app.search.service import RecommendationSearchItem, SearchItem, SearchResponse, SearchService
 
-__all__ = ["SearchItem", "SearchResponse", "SearchService"]
+__all__ = ["RecommendationSearchItem", "SearchItem", "SearchResponse", "SearchService"]

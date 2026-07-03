@@ -93,7 +93,7 @@ def seed_public_materials(session: Session) -> None:
         status=MaterialStatus.ACTIVE,
         published_at=datetime(2026, 1, 17, tzinfo=UTC),
         original_text="Материал про горячую воду.",
-        public_text="Горячая вода будет включена после завершения работ.",
+        public_text="При отсутствии горячей воды обратитесь в аварийную службу управляющей компании.",
     )
     repo.create(
         source_id=source.id,
@@ -231,7 +231,54 @@ def test_search_filters_by_public_category(
 
     assert response.status_code == 200
     assert "Отопление восстановят" in response.text
-    assert "Горячая вода будет включена" not in response.text
+    assert "аварийную службу управляющей компании" not in response.text
+
+
+def test_search_page_card_uses_matching_public_text_fragment(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    leading_text = "Стартовый нерелевантный фрагмент без нужных слов. " * 10
+    with session_factory() as session:
+        taxonomy = TaxonomyRepository(session)
+        housing = taxonomy.get_topic_by_slug("housing")
+        assert housing is not None
+        waste = taxonomy.get_category(topic_id=housing.id, slug="waste")
+        assert waste is not None
+        source = session.query(Material).first().source
+        MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=waste.id,
+            material_type=MaterialType.OFFICIAL_ANSWER,
+            status=MaterialStatus.ACTIVE,
+            published_at=datetime(2026, 2, 2, tzinfo=UTC),
+            original_text=leading_text + "В середине ответа сказано: мусорные контейнеры вывезет региональный оператор.",
+            public_text=leading_text + "В середине ответа сказано: мусорные контейнеры вывезет региональный оператор.",
+        )
+        session.commit()
+
+    response = client.get("/search?q=мусорные контейнеры")
+
+    assert response.status_code == 200
+    assert 'class="search-snippet"' in response.text
+    assert "мусорные контейнеры вывезет региональный оператор" in response.text
+    assert "Стартовый нерелевантный фрагмент без нужных слов. Стартовый нерелевантный фрагмент" not in response.text
+
+
+def test_search_page_shows_extracted_recommendations_above_materials(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, _ = public_app_context
+
+    response = client.get("/search?q=Что делать, если нет горячей воды?")
+
+    assert response.status_code == 200
+    assert "Что указано в найденных материалах" in response.text
+    assert "Это вспомогательное извлечение из найденных официальных материалов" in response.text
+    assert "Сервис не формирует официальный ответ администрации" in response.text
+    assert "При отсутствии горячей воды обратитесь в аварийную службу управляющей компании." in response.text
+    assert response.text.index("Что указано в найденных материалах") < response.text.index("Официальная публикация")
 
 
 def test_animals_filter_collapses_legacy_detailed_animal_categories(
@@ -315,6 +362,25 @@ def test_material_card_shows_public_fields_similar_and_source_url_only_when_pres
     assert "Оригинал:" not in response.text
     assert "Внутренняя заметка администратора" not in response.text
     assert "secret import metadata" not in response.text
+
+
+def test_material_card_can_show_extracted_recommendations_before_official_text(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    search_response = client.get("/search?q=горячей воды")
+    assert search_response.status_code == 200
+    with session_factory() as session:
+        material = session.query(Material).filter(Material.public_text.like("%аварийную службу%")).one()
+        material_id = material.id
+
+    response = client.get(f"/materials/{material_id}")
+
+    assert response.status_code == 200
+    assert "Что указано в материале" in response.text
+    assert "Это вспомогательное извлечение из официального материала" in response.text
+    assert response.text.index("Что указано в материале") < response.text.index("Официальный текст")
+    assert "Материал про горячую воду" not in response.text
 
 
 def test_material_without_source_url_does_not_render_source_link(

@@ -16,6 +16,20 @@
         {% endif %}
     </dl>
 
+    {% if recommendations %}
+        <section class="recommendation-block material-recommendations" aria-labelledby="material-recommendations-title">
+            <h2 id="material-recommendations-title">Что указано в материале</h2>
+            <p class="muted">Это вспомогательное извлечение из официального материала. Сервис не формирует официальный ответ администрации.</p>
+            <div class="recommendation-list">
+                {% for recommendation in recommendations %}
+                    <article class="recommendation-item">
+                        <p>{{ recommendation.text }}</p>
+                    </article>
+                {% endfor %}
+            </div>
+        </section>
+    {% endif %}
+
     <section class="official-text">
         <h2>Официальный текст</h2>
         <p>{{ material.public_text }}</p>

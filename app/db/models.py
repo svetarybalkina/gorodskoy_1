@@ -29,6 +29,7 @@ from app.db.enums import (
     MaterialType,
     ProblemQueryAction,
     ProblemQueryChannel,
+    RecommendationType,
     ReviewStatus,
     SourceKind,
 )
@@ -175,6 +176,29 @@ class Material(TimestampMixin, Base):
     person_name_reviews: Mapped[list[PersonNameReview]] = relationship(back_populates="material")
     admin_notes: Mapped[list[AdminNote]] = relationship(back_populates="material")
     dictionary_candidates: Mapped[list[DictionaryCandidate]] = relationship(back_populates="material")
+    recommendations: Mapped[list[MaterialRecommendation]] = relationship(back_populates="material")
+
+
+class MaterialRecommendation(TimestampMixin, Base):
+    __tablename__ = "material_recommendations"
+    __table_args__ = (
+        Index("ix_material_recommendations_material_id", "material_id"),
+        Index("ix_material_recommendations_type_confidence", "recommendation_type", "confidence"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id"), nullable=False)
+    recommendation_type: Mapped[RecommendationType] = mapped_column(
+        enum_column(RecommendationType, name="recommendation_type"), nullable=False
+    )
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    source_fragment: Mapped[str] = mapped_column(Text, nullable=False)
+    action_kind: Mapped[str] = mapped_column(String(80), default="general_action", nullable=False)
+    confidence: Mapped[int] = mapped_column(Integer, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    material: Mapped[Material] = relationship(back_populates="recommendations")
 
 
 class ResidentQuestion(TimestampMixin, Base):

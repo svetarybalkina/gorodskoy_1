@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Публикация черновиков{% endblock %}
+
+{% block content %}
+<section class="admin-toolbar">
+    <div>
+        <p class="eyebrow">Массовое действие</p>
+        <h1>Публикация готовых импортированных черновиков</h1>
+        <p class="muted">
+            Публикуются только импортированные официальные черновики публичной темы без нерешенных ФИО и без признаков неочищенного персонального обращения.
+        </p>
+        {% if published is not none %}
+            <div class="notice">Опубликовано карточек: {{ published }}. Поисковый индекс перестроен.</div>
+        {% endif %}
+    </div>
+    <div class="admin-detail">
+        <h2>Готово к публикации</h2>
+        <p class="metric">{{ preview.eligible }}</p>
+        <p class="muted">Эти карточки будут переведены из черновиков в опубликованные после подтверждения.</p>
+    </div>
+</section>
+
+<section class="admin-detail">
+    <h2>Почему часть карточек не будет опубликована</h2>
+    <dl class="compact-meta">
+        <div><dt>Импортированные карточки на проверке</dt><dd>{{ preview.blocked_needs_review }}</dd></div>
+        <div><dt>Ручные черновики</dt><dd>{{ preview.blocked_manual_drafts }}</dd></div>
+        <div><dt>Непубличная тема или неофициальный материал</dt><dd>{{ preview.blocked_non_public_topic }}</dd></div>
+        <div><dt>Есть нерешенная проверка ФИО</dt><dd>{{ preview.blocked_person_name_review }}</dd></div>
+        <div><dt>Есть признак неочищенного персонального обращения</dt><dd>{{ preview.blocked_salutation }}</dd></div>
+    </dl>
+</section>
+
+<section class="admin-detail">
+    <h2>Категории готовых карточек</h2>
+    {% if preview.by_category %}
+        <div class="admin-list">
+            {% for category, count in preview.by_category %}
+                <article class="admin-row">
+                    <div>
+                        <h3>{{ category }}</h3>
+                        <p>Готово к публикации: {{ count }}</p>
+                    </div>
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="muted">Готовых импортированных черновиков нет.</p>
+    {% endif %}
+</section>
+
+<section class="admin-actions">
+    <h2>Подтверждение</h2>
+    <p class="muted">
+        Это действие публикует сразу все готовые импортированные черновики и перестраивает поиск. Карточки на проверке не затрагиваются.
+    </p>
+    <form action="/admin/publication/publish-imported-drafts" method="post" class="admin-form compact">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label>
+            Для публикации введите: {{ confirmation_phrase }}
+            <input type="text" name="confirmation" autocomplete="off" {% if preview.eligible == 0 %}disabled{% endif %}>
+        </label>
+        <button type="submit" {% if preview.eligible == 0 %}disabled{% endif %}>Опубликовать готовые черновики</button>
+    </form>
+</section>
+{% endblock %}

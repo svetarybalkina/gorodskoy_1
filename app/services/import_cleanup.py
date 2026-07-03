@@ -11,6 +11,7 @@ from app.db.models import (
     DictionaryCandidate,
     Material,
     MaterialLink,
+    MaterialRecommendation,
     PersonNameReview,
     ProblemQuery,
     QuestionVariant,
@@ -34,6 +35,7 @@ class ImportCleanupPreview:
     redaction_events: int
     person_name_reviews: int
     dictionary_candidates: int
+    material_recommendations: int
     problem_queries_to_unlink: int
 
 
@@ -78,6 +80,7 @@ def cleanup_test_import_materials(
     session.execute(delete(RedactionEvent).where(RedactionEvent.material_id.in_(material_ids)))
     session.execute(delete(PersonNameReview).where(PersonNameReview.material_id.in_(material_ids)))
     session.execute(delete(DictionaryCandidate).where(DictionaryCandidate.material_id.in_(material_ids)))
+    session.execute(delete(MaterialRecommendation).where(MaterialRecommendation.material_id.in_(material_ids)))
     session.execute(delete(Material).where(Material.id.in_(material_ids)))
     session.flush()
     return preview
@@ -116,6 +119,7 @@ def _preview_for_material_ids(session: Session, material_ids: list[int]) -> Impo
             redaction_events=0,
             person_name_reviews=0,
             dictionary_candidates=0,
+            material_recommendations=0,
             problem_queries_to_unlink=0,
         )
     return ImportCleanupPreview(
@@ -126,6 +130,7 @@ def _preview_for_material_ids(session: Session, material_ids: list[int]) -> Impo
         redaction_events=_count(session, RedactionEvent.material_id, material_ids),
         person_name_reviews=_count(session, PersonNameReview.material_id, material_ids),
         dictionary_candidates=_count(session, DictionaryCandidate.material_id, material_ids),
+        material_recommendations=_count(session, MaterialRecommendation.material_id, material_ids),
         problem_queries_to_unlink=_count(session, ProblemQuery.shown_material_id, material_ids),
     )
 

@@ -31,8 +31,27 @@
         {% if match_level in ["medium", "low"] %}
             <div class="notice">Совпадение может быть неточным. Проверьте дату, источник и официальный текст материала.</div>
         {% endif %}
+        {% if recommendations %}
+            <section class="recommendation-block" aria-labelledby="recommendations-title">
+                <h2 id="recommendations-title">Что указано в найденных материалах</h2>
+                <p class="muted">Это вспомогательное извлечение из найденных официальных материалов. Сервис не формирует официальный ответ администрации.</p>
+                <div class="recommendation-list">
+                    {% for item in recommendations %}
+                        <article class="recommendation-item">
+                            <p>{{ item.recommendation.text }}</p>
+                            <div class="meta">
+                                <span>{{ item.material.published_at|date_ru }}</span>
+                                <span>{{ item.material.source.name }}</span>
+                                <a href="/materials/{{ item.material.id }}{% if query %}?q={{ query|urlencode }}{% endif %}">Открыть материал</a>
+                            </div>
+                        </article>
+                    {% endfor %}
+                </div>
+            </section>
+        {% endif %}
         <div class="result-list">
-            {% for material in materials %}
+            {% for item in search_items %}
+                {% set material = item.material %}
                 <article class="result-card">
                     <div class="meta">
                         <span>{{ material.material_type|material_type_label }}</span>
@@ -40,7 +59,7 @@
                         <span>{{ material.source.name }}</span>
                     </div>
                     <h2><a href="/materials/{{ material.id }}{% if query %}?q={{ query|urlencode }}{% endif %}">{{ material|public_material_category_name }}</a></h2>
-                    <p>{{ material.public_text[:320] }}{% if material.public_text|length > 320 %}...{% endif %}</p>
+                    <p class="search-snippet">{{ item.snippet }}</p>
                     <a class="read-more" href="/materials/{{ material.id }}{% if query %}?q={{ query|urlencode }}{% endif %}">Открыть материал</a>
                 </article>
             {% endfor %}

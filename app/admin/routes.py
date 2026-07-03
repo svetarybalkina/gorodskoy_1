@@ -43,6 +43,7 @@ from app.importers.telegram_json import TelegramImportError, TelegramJsonImporte
 from app.search import SearchService
 from app.search.normalization import normalize_text
 from app.services.anonymization import has_unredacted_salutation_addressee
+from app.services.bulk_publication import BulkPublicationService
 from app.services.material_deletion import MaterialDeletionService
 from app.services.person_reviews import PersonNameReviewService
 from app.services.reprocessing import MaterialReprocessingService
@@ -282,6 +283,25 @@ async def imports_list(
     )
 
 
+@router.get("/publication", response_class=HTMLResponse)
+async def publication_preview(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+    settings: Settings = Depends(get_settings),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "admin/publication.html",
+        {
+            **admin_template_context(request, settings, admin_user),
+            "preview": BulkPublicationService(db).preview_imported_drafts(),
+            "published": request.query_params.get("published"),
+            "confirmation_phrase": "ОПУБЛИКОВАТЬ ГОТОВЫЕ ЧЕРНОВИКИ",
+        },
+    )
+
+
 @router.get("/reviews", response_class=HTMLResponse)
 async def reviews_list(
     request: Request,
@@ -379,6 +399,24 @@ async def imports_upload(
         )
     db.commit()
     return RedirectResponse(f"/admin/imports/{result.batch_id}", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.post("/publication/publish-imported-drafts")
+async def publish_imported_drafts(
+    request: Request,
+    admin_user: CurrentAdmin,
+    db: Session = Depends(get_db_session),
+) -> RedirectResponse:
+    form = await read_urlencoded_form(request)
+    validate_csrf_token(request, form.get("csrf_token"))
+    if form.get("confirmation", "").strip() != "ОПУБЛИКОВАТЬ ГОТОВЫЕ ЧЕРНОВИКИ":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid publication confirmation")
+    result = BulkPublicationService(db).publish_imported_drafts()
+    db.commit()
+    return RedirectResponse(
+        f"/admin/publication?published={result.published}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 @router.get("/imports/{batch_id}", response_class=HTMLResponse)

@@ -12,7 +12,18 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings, get_settings
 from app.db.base import Base
 from app.db.enums import ImportStatus, MaterialStatus, MaterialType, ProblemQueryChannel, SourceKind
-from app.db.models import AdminNote, ImportBatch, ImportReport, Material, PersonNameReview, ProblemQuery, RedactionEvent, Source
+from app.db.models import (
+    AdminNote,
+    ImportBatch,
+    ImportReport,
+    Material,
+    MaterialLink,
+    PersonNameReview,
+    ProblemQuery,
+    RedactionEvent,
+    ResidentQuestion,
+    Source,
+)
 from app.db.repositories import ImportRepository, MaterialRepository, SourceRepository, TaxonomyRepository
 from app.db.seed import seed_initial_data
 from app.db.session import create_database_engine, get_db_session
@@ -25,6 +36,7 @@ from app.importers.telegram_json import (
 )
 from app.main import create_app
 from app.services.import_cleanup import cleanup_test_import_materials, preview_test_import_cleanup
+from app.services.question_linking import QuestionLinkRebuildService
 
 
 @pytest.fixture()
@@ -152,6 +164,57 @@ def test_importer_creates_draft_materials_only_for_fixed_official_source(
     assert Path(report.report_file_path or "").exists()
 
 
+def test_importer_saves_resident_question_and_links_official_reply(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        AUTO_DB_BOOTSTRAP=False,
+        OFFICIAL_TELEGRAM_SOURCE_ID="official_channel_1",
+        OFFICIAL_TELEGRAM_SOURCE_NAME="Администрация",
+        OFFICIAL_TELEGRAM_SOURCE_KIND="official_channel",
+    )
+    TelegramJsonImporter(
+        session=session,
+        settings=settings,
+        imports_dir=tmp_path / "imports",
+        exports_dir=tmp_path / "exports",
+    ).import_bytes(
+        filename="result.json",
+        content=telegram_export(
+            [
+                {
+                    "id": 100,
+                    "type": "message",
+                    "date": "2026-06-20T10:00:00",
+                    "from_id": "resident_1",
+                    "text": "Куда жаловаться на управляющую компанию?",
+                },
+                {
+                    "id": 101,
+                    "type": "message",
+                    "date": "2026-06-20T10:05:00",
+                    "from_id": "official_channel_1",
+                    "reply_to_message_id": 100,
+                    "text": "Жалобу на управляющую компанию можно направить в жилищную инспекцию.",
+                },
+            ]
+        ),
+    )
+    session.commit()
+
+    material = session.query(Material).one()
+    question = session.query(ResidentQuestion).one()
+    link = session.query(MaterialLink).one()
+
+    assert material.public_text == "Жалобу на управляющую компанию можно направить в жилищную инспекцию."
+    assert question.external_message_id == "100"
+    assert question.normalized_text is not None
+    assert "жаловаться" in question.anonymized_text
+    assert link.question_id == question.id
+    assert link.material_id == material.id
+
+
 def test_importer_records_duplicate_without_failing_batch(session: Session, tmp_path: Path) -> None:
     settings = Settings(
         AUTO_DB_BOOTSTRAP=False,
@@ -187,6 +250,77 @@ def test_importer_records_duplicate_without_failing_batch(session: Session, tmp_
     assert report.summary["duplicate_count"] == 1
 
 
+def test_question_link_rebuild_service_restores_links_from_saved_export(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    source = SourceRepository(session).create(
+        code="telegram:official_channel_1",
+        name="Администрация",
+        kind=SourceKind.OFFICIAL_CHANNEL,
+        external_id="official_channel_1",
+    )
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    management = taxonomy.get_category(topic_id=housing.id, slug="management_company")
+    assert management is not None
+    batch = ImportRepository(session).create_batch(filename="result.json", source_file_path="")
+    material = MaterialRepository(session).create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=management.id,
+        import_batch_id=batch.id,
+        external_message_id="101",
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 6, 20, tzinfo=UTC),
+        original_text="Жалобу на управляющую компанию можно направить в жилищную инспекцию.",
+        public_text="Жалобу на управляющую компанию можно направить в жилищную инспекцию.",
+    )
+    export_path = tmp_path / "result.json"
+    export_path.write_bytes(
+        telegram_export(
+            [
+                {
+                    "id": 100,
+                    "type": "message",
+                    "date": "2026-06-20T10:00:00",
+                    "from_id": "resident_1",
+                    "text": "Куда жаловаться на управляющую компанию?",
+                },
+                {
+                    "id": 101,
+                    "type": "message",
+                    "date": "2026-06-20T10:05:00",
+                    "from_id": "official_channel_1",
+                    "reply_to_message_id": 100,
+                    "text": material.original_text,
+                },
+            ]
+        )
+    )
+    batch.source_file_path = export_path.as_posix()
+    session.commit()
+
+    service = QuestionLinkRebuildService(session)
+    preview = service.rebuild_for_batch(batch_id=batch.id)
+    assert preview.questions_created == 1
+    assert preview.links_created == 0
+    assert session.query(ResidentQuestion).count() == 0
+
+    first = service.rebuild_for_batch(batch_id=batch.id, execute=True)
+    second = service.rebuild_for_batch(batch_id=batch.id, execute=True)
+    session.commit()
+
+    assert first.questions_created == 1
+    assert first.links_created == 1
+    assert second.questions_existing == 1
+    assert second.links_existing == 1
+    assert session.query(ResidentQuestion).count() == 1
+    assert session.query(MaterialLink).count() == 1
+
+
 def test_imported_draft_materials_do_not_appear_in_public_search(
     session: Session,
     tmp_path: Path,
@@ -219,6 +353,54 @@ def test_imported_draft_materials_do_not_appear_in_public_search(
     session.commit()
 
     assert MaterialRepository(session).search_public(query="отопление") == []
+
+
+def test_importer_classifies_transport_as_non_public_topic_and_waste_as_housing_category(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        AUTO_DB_BOOTSTRAP=False,
+        OFFICIAL_TELEGRAM_SOURCE_ID="official_channel_1",
+        OFFICIAL_TELEGRAM_SOURCE_NAME="Администрация",
+        OFFICIAL_TELEGRAM_SOURCE_KIND="official_channel",
+    )
+    TelegramJsonImporter(
+        session=session,
+        settings=settings,
+        imports_dir=tmp_path / "imports",
+        exports_dir=tmp_path / "exports",
+    ).import_bytes(
+        filename="result.json",
+        content=telegram_export(
+            [
+                {
+                    "id": 30,
+                    "type": "message",
+                    "date": "2026-06-20T10:00:00",
+                    "from_id": "official_channel_1",
+                    "text": "Управлением транспорта указано провести инструктаж с водителями автобусов маршрута № 8.",
+                },
+                {
+                    "id": 31,
+                    "type": "message",
+                    "date": "2026-06-20T10:05:00",
+                    "from_id": "official_channel_1",
+                    "text": "Мусорные контейнеры и отходы будут вывезены региональным оператором.",
+                },
+            ]
+        ),
+    )
+    session.commit()
+
+    transport_material = session.query(Material).filter_by(external_message_id="30").one()
+    waste_material = session.query(Material).filter_by(external_message_id="31").one()
+
+    assert transport_material.topic.slug == "transport"
+    assert transport_material.category_id is None
+    assert waste_material.topic.slug == "housing"
+    assert waste_material.category is not None
+    assert waste_material.category.slug == "waste"
 
 
 def test_cleanup_test_import_materials_removes_only_unapproved_imported_materials(

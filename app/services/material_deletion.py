@@ -11,6 +11,7 @@ from app.db.models import (
     DictionaryCandidate,
     Material,
     MaterialLink,
+    MaterialRecommendation,
     PersonNameReview,
     ProblemQuery,
     QuestionVariant,
@@ -27,6 +28,7 @@ class MaterialDeletePreview:
     redaction_events: int
     person_name_reviews: int
     dictionary_candidates: int
+    material_recommendations: int
     problem_queries_to_unlink: int
     duplicate_children_to_unlink: int
     search_index_rows: int
@@ -47,6 +49,7 @@ class MaterialDeletionService:
             redaction_events=self._count(RedactionEvent.material_id, material_id),
             person_name_reviews=self._count(PersonNameReview.material_id, material_id),
             dictionary_candidates=self._count(DictionaryCandidate.material_id, material_id),
+            material_recommendations=self._count(MaterialRecommendation.material_id, material_id),
             problem_queries_to_unlink=self._count(ProblemQuery.shown_material_id, material_id),
             duplicate_children_to_unlink=self._count(Material.duplicate_of_id, material_id),
             search_index_rows=self._search_index_count(material_id),
@@ -88,6 +91,7 @@ class MaterialDeletionService:
         self.session.execute(delete(RedactionEvent).where(RedactionEvent.material_id == material_id))
         self.session.execute(delete(PersonNameReview).where(PersonNameReview.material_id == material_id))
         self.session.execute(delete(DictionaryCandidate).where(DictionaryCandidate.material_id == material_id))
+        self.session.execute(delete(MaterialRecommendation).where(MaterialRecommendation.material_id == material_id))
         self.session.delete(material)
         self.session.flush()
         return True
@@ -104,6 +108,7 @@ class MaterialDeletionService:
                     normalized_text,
                     public_text,
                     category_text,
+                    recommendation_text,
                     tokenize='unicode61 remove_diacritics 2'
                 )
                 """

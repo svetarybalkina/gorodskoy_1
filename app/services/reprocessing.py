@@ -10,6 +10,7 @@ from app.db.models import Material, PersonNameReview, RedactionEvent
 from app.db.repositories import ReviewRepository
 from app.search import SearchService
 from app.services.anonymization import anonymize_text
+from app.services.recommendations import RecommendationExtractionService
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,8 @@ class MaterialReprocessingService:
             )
         if reindex:
             SearchService(self.session).reindex_material(material.id)
+        else:
+            RecommendationExtractionService(self.session).refresh_material(material.id)
         return ReprocessResult(
             processed=1,
             needs_review=1 if anonymized.needs_review else 0,

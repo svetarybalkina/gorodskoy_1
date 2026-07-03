@@ -13,10 +13,20 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.db.enums import ImportStatus, MaterialStatus, MaterialType, SourceKind
-from app.db.models import Material
-from app.db.repositories import ImportRepository, MaterialRepository, ReviewRepository, SourceRepository, TaxonomyRepository
+from app.db.enums import ImportStatus, LinkReason, MaterialStatus, MaterialType, SourceKind
+from app.db.models import Material, ResidentQuestion
+from app.db.repositories import (
+    ImportRepository,
+    MaterialRepository,
+    QuestionRepository,
+    ReviewRepository,
+    SourceRepository,
+    TaxonomyRepository,
+)
+from app.search.normalization import normalize_text
+from app.services.classification import HOUSING_TOPIC, classify_material_text
 from app.services.anonymization import AnonymizationResult, anonymize_text
+from app.services.recommendations import RecommendationExtractionService
 
 
 class TelegramImportError(ValueError):
@@ -30,6 +40,7 @@ class TelegramMessage:
     date: datetime | None
     text: str
     source_identifiers: set[str]
+    reply_to_message_id: str | None = None
     is_service: bool = False
 
 
@@ -161,6 +172,8 @@ class TelegramJsonImporter:
             messages = payload["messages"]
             anonymized_messages = anonymized_payload.get("messages", [])
             export_identifiers = extract_export_identifiers(payload)
+            resident_questions_by_message_id: dict[str, ResidentQuestion] = {}
+            pending_links: dict[str, list[int]] = {}
             builder.total_messages = len(messages)
             for index, raw_message in enumerate(messages):
                 try:
@@ -193,7 +206,7 @@ class TelegramJsonImporter:
                         if isinstance(anonymized_message, dict):
                             anonymized_message["text"] = anonymization.text
                     if identifiers_match(parsed.source_identifiers, source_id):
-                        self._create_material(
+                        material = self._create_material(
                             source_id=source.id,
                             source_kind=source_kind,
                             message=parsed,
@@ -201,7 +214,32 @@ class TelegramJsonImporter:
                             batch_id=batch.id,
                             builder=builder,
                         )
+                        if material is not None and parsed.reply_to_message_id:
+                            question = resident_questions_by_message_id.get(parsed.reply_to_message_id)
+                            if question is not None:
+                                QuestionRepository(self.session).link_to_material(
+                                    question_id=question.id,
+                                    material_id=material.id,
+                                    reason=LinkReason.IMPORTED_PAIR,
+                                    confidence=100,
+                                )
+                            else:
+                                pending_links.setdefault(parsed.reply_to_message_id, []).append(material.id)
                     else:
+                        question = self._create_resident_question(
+                            message=parsed,
+                            anonymization=anonymization,
+                            batch_id=batch.id,
+                        )
+                        if parsed.message_id:
+                            resident_questions_by_message_id[parsed.message_id] = question
+                            for material_id in pending_links.pop(parsed.message_id, []):
+                                QuestionRepository(self.session).link_to_material(
+                                    question_id=question.id,
+                                    material_id=material_id,
+                                    reason=LinkReason.IMPORTED_PAIR,
+                                    confidence=100,
+                                )
                         builder.resident_questions_found += 1
                 except Exception as exc:  # noqa: BLE001
                     builder.add_error(
@@ -265,7 +303,7 @@ class TelegramJsonImporter:
         anonymization: AnonymizationResult,
         batch_id: int,
         builder: ImportReportBuilder,
-    ) -> None:
+    ) -> Material | None:
         if message.message_id and self._material_exists(source_id=source_id, message_id=message.message_id):
             builder.duplicate_count += 1
             builder.add_review_case(
@@ -274,7 +312,7 @@ class TelegramJsonImporter:
                 code="duplicate",
                 description="Материал с таким Telegram id уже был импортирован.",
             )
-            return
+            return None
         if message.date is None:
             builder.add_review_case(
                 index=message.index,
@@ -283,14 +321,17 @@ class TelegramJsonImporter:
                 description="Официальное сообщение без даты не сохранено как материал.",
             )
             builder.needs_review_count += 1
-            return
+            return None
 
         taxonomy = TaxonomyRepository(self.session)
-        topic = taxonomy.get_topic_by_slug("housing")
+        classification = classify_material_text(anonymization.text)
+        topic = taxonomy.get_topic_by_slug(classification.topic_slug)
         if topic is None:
-            raise TelegramImportError("Base topic 'housing' is missing")
-        category = taxonomy.get_category(topic_id=topic.id, slug=self._guess_category_slug(message.text))
-        if category is None:
+            raise TelegramImportError(f"Base topic '{classification.topic_slug}' is missing")
+        category = None
+        if classification.topic_slug == HOUSING_TOPIC and classification.category_slug is not None:
+            category = taxonomy.get_category(topic_id=topic.id, slug=classification.category_slug)
+        if classification.topic_slug == HOUSING_TOPIC and category is None:
             category = taxonomy.get_category(topic_id=topic.id, slug="other")
 
         material_type = (
@@ -316,6 +357,12 @@ class TelegramJsonImporter:
             metadata_json={
                 "telegram_source_identifiers": sorted(message.source_identifiers),
                 "anonymization_status": "completed",
+                "classification": {
+                    "topic": classification.topic_slug,
+                    "category": classification.category_slug,
+                    "confidence": classification.confidence,
+                    "matched_group": classification.matched_group,
+                },
                 "review_cases": [case.code for case in anonymization.review_cases],
             },
         )
@@ -336,6 +383,7 @@ class TelegramJsonImporter:
                 context=person_name.context,
             )
             builder.person_name_reviews_count += 1
+        RecommendationExtractionService(self.session).refresh_material(material.id)
         for review_case in anonymization.review_cases:
             builder.add_review_case(
                 index=message.index,
@@ -372,6 +420,30 @@ class TelegramJsonImporter:
                 "person_name_reviews": len(anonymization.person_names),
             }
         )
+        return material
+
+    def _create_resident_question(
+        self,
+        *,
+        message: TelegramMessage,
+        anonymization: AnonymizationResult,
+        batch_id: int,
+    ) -> ResidentQuestion:
+        taxonomy = TaxonomyRepository(self.session)
+        classification = classify_material_text(anonymization.text)
+        category = None
+        if classification.topic_slug == HOUSING_TOPIC and classification.category_slug is not None:
+            topic = taxonomy.get_topic_by_slug(HOUSING_TOPIC)
+            if topic is not None:
+                category = taxonomy.get_category(topic_id=topic.id, slug=classification.category_slug)
+        return QuestionRepository(self.session).create_resident_question(
+            anonymized_text=anonymization.text,
+            normalized_text=normalize_text(anonymization.text),
+            category_id=category.id if category is not None else None,
+            import_batch_id=batch_id,
+            external_message_id=message.message_id,
+            source_channel="telegram",
+        )
 
     def _material_exists(self, *, source_id: int, message_id: str) -> bool:
         return (
@@ -383,22 +455,6 @@ class TelegramJsonImporter:
             )
             is not None
         )
-
-    def _guess_category_slug(self, text: str) -> str:
-        lowered = text.lower()
-        markers = [
-            ("heating", ["отоп", "батар", "тепл"]),
-            ("water", ["вод", "гвс", "хвс", "канализац"]),
-            ("entrance", ["подъезд", "лестниц", "лифт"]),
-            ("yard", ["двор", "парков", "детск", "площадк"]),
-            ("management_company", ["управляющ", "ук ", "жэк"]),
-            ("bills", ["квитанц", "начисл", "платеж", "оплат"]),
-            ("animals", ["собак", "кош", "животн", "отлов"]),
-        ]
-        for slug, words in markers:
-            if any(word in lowered for word in words):
-                return slug
-        return "other"
 
     def _parse_source_kind(self, value: str) -> SourceKind:
         try:
@@ -453,6 +509,7 @@ def parse_telegram_message(
         date=parse_telegram_datetime(raw_message.get("date")),
         text=text,
         source_identifiers=identifiers,
+        reply_to_message_id=_safe_reply_to_message_id(raw_message),
         is_service=is_service,
     )
 
@@ -522,6 +579,14 @@ def _identifier_variants(value: str) -> set[str]:
 def _safe_message_id(raw_message: Any) -> str | None:
     if isinstance(raw_message, dict):
         value = raw_message.get("id")
+        if isinstance(value, (str, int)):
+            return str(value)
+    return None
+
+
+def _safe_reply_to_message_id(raw_message: Any) -> str | None:
+    if isinstance(raw_message, dict):
+        value = raw_message.get("reply_to_message_id")
         if isinstance(value, (str, int)):
             return str(value)
     return None

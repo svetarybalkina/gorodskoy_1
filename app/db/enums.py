@@ -23,6 +23,14 @@ class MaterialStatus(StrEnum):
     PENDING_DELETE = "pending_delete"
 
 
+class RecommendationType(StrEnum):
+    CONTACT = "contact"
+    CONDITION = "condition"
+    DEADLINE = "deadline"
+    RESTRICTION = "restriction"
+    NEXT_STEP = "next_step"
+
+
 class ImportStatus(StrEnum):
     PENDING = "pending"
     PROCESSING = "processing"

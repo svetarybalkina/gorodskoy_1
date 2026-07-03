@@ -90,6 +90,7 @@ def seed_search_materials(session: Session) -> None:
 
 def test_russian_morphology_and_category_dictionaries() -> None:
     assert normalize_text("собака собаки собакой") == "собака собака собака"
+    assert normalize_text("Что делать, если нет горячей воды?") == "горячий вода"
     assert guess_category_slug("во дворе агрессивные собаки") == "animals"
     assert guess_category_slug("куда жаловаться на УК по квитанции") in {"management_company", "bills"}
 
@@ -114,6 +115,157 @@ def test_search_finds_public_materials_with_word_forms_and_animals_category() ->
     assert "агрессивным собакам" in dogs.materials[0].public_text
     assert transport.match_level == "none"
     assert transport.materials == []
+
+
+def test_hot_water_query_does_not_rank_road_salt_water_material_first() -> None:
+    session = seeded_session()
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    water = taxonomy.get_category(topic_id=housing.id, slug="water")
+    assert water is not None
+    source = session.query(Material).first().source
+    repo = MaterialRepository(session)
+    salt_material = repo.create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=water.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 4, tzinfo=UTC),
+        original_text="Зимой дороги отсыпают пескосоляной смесью. Песок делает дорогу шероховатой, соль понижает температуру замерзания воды.",
+        public_text="Зимой дороги отсыпают пескосоляной смесью. Песок делает дорогу шероховатой, соль понижает температуру замерзания воды.",
+    )
+    hot_water_material = repo.create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=water.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 5, tzinfo=UTC),
+        original_text="Подача горячей воды восстановлена после ремонта сетей.",
+        public_text="Подача горячей воды восстановлена после ремонта сетей.",
+    )
+    service = SearchService(session)
+    service.rebuild_index()
+
+    response = service.search_public("Что делать, если нет горячей воды?", record_problem_query=False)
+
+    assert response.materials[0].id == hot_water_material.id
+    assert salt_material.id in [material.id for material in response.materials]
+    assert response.materials.index(hot_water_material) < response.materials.index(salt_material)
+
+
+def test_search_item_snippet_uses_matching_fragment_from_public_text() -> None:
+    session = seeded_session()
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    waste = taxonomy.get_category(topic_id=housing.id, slug="waste")
+    assert waste is not None
+    source = session.query(Material).first().source
+    leading_text = "Начальный нерелевантный блок без нужных слов. " * 10
+    target = MaterialRepository(session).create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=waste.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 6, tzinfo=UTC),
+        original_text=leading_text + "В середине ответа указано, что мусорные контейнеры вывезет региональный оператор.",
+        public_text=leading_text + "В середине ответа указано, что мусорные контейнеры вывезет региональный оператор.",
+    )
+    service = SearchService(session)
+    service.rebuild_index()
+
+    response = service.search_public("мусорные контейнеры", record_problem_query=False)
+    item = next(search_item for search_item in response.items if search_item.material.id == target.id)
+
+    assert "мусорные контейнеры" in item.snippet
+    assert not item.snippet.startswith("Начальный нерелевантный блок")
+
+
+def test_search_item_snippet_falls_back_when_match_is_not_in_public_text() -> None:
+    session = seeded_session()
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    heating = taxonomy.get_category(topic_id=housing.id, slug="heating")
+    assert heating is not None
+    source = session.query(Material).first().source
+    public_text = "Первое предложение без поискового маркера. Второе предложение тоже справочное."
+    target = MaterialRepository(session).create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=heating.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 6, tzinfo=UTC),
+        original_text=public_text,
+        public_text=public_text,
+    )
+    service = SearchService(session)
+    service.rebuild_index()
+
+    response = service.search_public("котельная", record_problem_query=False)
+    item = next(search_item for search_item in response.items if search_item.material.id == target.id)
+
+    assert item.snippet == public_text
+
+
+def test_category_only_search_uses_category_markers_for_snippet() -> None:
+    session = seeded_session()
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    animals = taxonomy.get_category(topic_id=housing.id, slug="animals")
+    assert animals is not None
+    source = session.query(Material).first().source
+    leading_text = "В начале ответа приведены общие сведения без тематических слов. " * 8
+    target = MaterialRepository(session).create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=animals.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 7, tzinfo=UTC),
+        original_text=leading_text + "Далее указано: для отлова животных необходимо обратиться в профильную службу.",
+        public_text=leading_text + "Далее указано: для отлова животных необходимо обратиться в профильную службу.",
+    )
+    service = SearchService(session)
+    service.rebuild_index()
+
+    response = service.search_public("", category_id=animals.id, record_problem_query=False)
+
+    assert response.items[0].material.id == target.id
+    assert "отлова животных" in response.items[0].snippet
+    assert not response.items[0].snippet.startswith("В начале ответа")
+
+
+def test_category_filter_requires_public_text_category_evidence() -> None:
+    session = seeded_session()
+    taxonomy = TaxonomyRepository(session)
+    housing = taxonomy.get_topic_by_slug("housing")
+    assert housing is not None
+    animals = taxonomy.get_category(topic_id=housing.id, slug="animals")
+    assert animals is not None
+    source = session.query(Material).first().source
+    wrong_category_material = MaterialRepository(session).create(
+        source_id=source.id,
+        topic_id=housing.id,
+        category_id=animals.id,
+        material_type=MaterialType.OFFICIAL_ANSWER,
+        status=MaterialStatus.ACTIVE,
+        published_at=datetime(2026, 1, 8, tzinfo=UTC),
+        original_text="Ремонт автомобильной дороги включен в план работ.",
+        public_text="Ремонт автомобильной дороги включен в план работ.",
+    )
+    service = SearchService(session)
+    service.rebuild_index()
+
+    response = service.search_public("", category_id=animals.id, record_problem_query=False)
+
+    assert wrong_category_material.id not in [item.material.id for item in response.items]
 
 
 def test_low_confidence_search_saves_anonymized_problem_query_and_candidate() -> None:

@@ -620,6 +620,120 @@ def test_admin_can_create_category_and_confirm_category_candidate(
     assert "Парковки" in after_public.text
 
 
+def test_admin_bulk_publishes_only_ready_imported_drafts(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        taxonomy = TaxonomyRepository(session)
+        housing = taxonomy.get_topic_by_slug("housing")
+        transport = taxonomy.get_topic_by_slug("transport")
+        assert housing is not None
+        assert transport is not None
+        water = taxonomy.get_category(topic_id=housing.id, slug="water")
+        assert water is not None
+        source = SourceRepository(session).create(
+            code="bulk-publication-source",
+            name="Источник массовой публикации",
+            kind=SourceKind.OFFICIAL_CHANNEL,
+        )
+        batch = ImportRepository(session).create_batch(filename="bulk.json")
+        ready = MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=water.id,
+            import_batch_id=batch.id,
+            material_type=MaterialType.OFFICIAL_POST,
+            status=MaterialStatus.DRAFT,
+            published_at=datetime(2026, 7, 1, tzinfo=UTC),
+            original_text="Официальный текст про холодную воду.",
+            public_text="Холодная вода подается после завершения работ.",
+        )
+        blocked_salutation = MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=water.id,
+            import_batch_id=batch.id,
+            material_type=MaterialType.OFFICIAL_POST,
+            status=MaterialStatus.DRAFT,
+            published_at=datetime(2026, 7, 2, tzinfo=UTC),
+            original_text="@user, Здравствуйте. Текст требует проверки.",
+            public_text="@user, Здравствуйте. Текст требует проверки.",
+        )
+        blocked_topic = MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=transport.id,
+            import_batch_id=batch.id,
+            material_type=MaterialType.OFFICIAL_POST,
+            status=MaterialStatus.DRAFT,
+            published_at=datetime(2026, 7, 3, tzinfo=UTC),
+            original_text="Транспортный импортированный черновик.",
+            public_text="Транспортный импортированный черновик.",
+        )
+        blocked_review = MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=water.id,
+            import_batch_id=batch.id,
+            material_type=MaterialType.OFFICIAL_ANSWER,
+            status=MaterialStatus.NEEDS_REVIEW,
+            published_at=datetime(2026, 7, 4, tzinfo=UTC),
+            original_text="Ответ подписал Иванов Иван Иванович.",
+            public_text="Ответ подписал Иванов Иван Иванович.",
+            needs_person_name_review=True,
+        )
+        session.commit()
+        ready_id = ready.id
+        blocked_salutation_id = blocked_salutation.id
+        blocked_topic_id = blocked_topic.id
+        blocked_review_id = blocked_review.id
+
+    preview = client.get("/admin/publication")
+
+    assert preview.status_code == 200
+    assert "Публикация готовых импортированных черновиков" in preview.text
+    assert "ОПУБЛИКОВАТЬ ГОТОВЫЕ ЧЕРНОВИКИ" in preview.text
+    assert "Готово к публикации" in preview.text
+
+    bad_confirmation = client.post(
+        "/admin/publication/publish-imported-drafts",
+        data={"csrf_token": csrf_token, "confirmation": "опубликовать"},
+        follow_redirects=False,
+    )
+    no_csrf = client.post(
+        "/admin/publication/publish-imported-drafts",
+        data={"confirmation": "ОПУБЛИКОВАТЬ ГОТОВЫЕ ЧЕРНОВИКИ"},
+        follow_redirects=False,
+    )
+
+    assert bad_confirmation.status_code == 400
+    assert no_csrf.status_code == 403
+
+    response = client.post(
+        "/admin/publication/publish-imported-drafts",
+        data={
+            "csrf_token": csrf_token,
+            "confirmation": "ОПУБЛИКОВАТЬ ГОТОВЫЕ ЧЕРНОВИКИ",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/publication?published=1"
+    with session_factory() as session:
+        assert session.get(Material, ready_id).status == MaterialStatus.ACTIVE
+        assert session.get(Material, blocked_salutation_id).status == MaterialStatus.DRAFT
+        assert session.get(Material, blocked_topic_id).status == MaterialStatus.DRAFT
+        assert session.get(Material, blocked_review_id).status == MaterialStatus.NEEDS_REVIEW
+
+    public_response = client.get("/search?q=холодная вода")
+    assert public_response.status_code == 200
+    assert "Холодная вода подается после завершения работ." in public_response.text
+    assert "Текст требует проверки" not in public_response.text
+    assert "Транспортный импортированный черновик" not in public_response.text
+
+
 def test_reprocess_material_and_import_batch_without_autopublishing(
     admin_app_context: tuple[TestClient, sessionmaker[Session]],
 ) -> None:

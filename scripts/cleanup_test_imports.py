@@ -52,6 +52,7 @@ def main() -> int:
         print(f"  redaction_events: {preview.redaction_events}")
         print(f"  person_name_reviews: {preview.person_name_reviews}")
         print(f"  dictionary_candidates: {preview.dictionary_candidates}")
+        print(f"  material_recommendations: {preview.material_recommendations}")
         print(f"  problem_queries_to_unlink: {preview.problem_queries_to_unlink}")
 
         if not args.execute:
