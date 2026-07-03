@@ -23,7 +23,5 @@ Telegram Desktop/
 *.webm
 
 .git/
-.gitignore
-.dockerignore
 .DS_Store
 Thumbs.db

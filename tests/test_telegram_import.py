@@ -135,6 +135,9 @@ def test_importer_creates_draft_materials_only_for_fixed_official_source(
     assert material.status == MaterialStatus.DRAFT
     assert material.material_type == MaterialType.OFFICIAL_POST
     assert material.original_text == "Официальный пост про отопление."
+    assert "Когда включат отопление?" not in material.original_text
+    assert "Когда включат отопление?" not in material.public_text
+    assert session.query(Material).count() == 1
     assert batch is not None
     assert batch.status == ImportStatus.COMPLETED
     assert report is not None
