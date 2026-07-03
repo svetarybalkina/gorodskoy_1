@@ -319,6 +319,52 @@ def test_active_status_returns_public_topic_material_to_public_search(
     assert "Скрытая публичная версия про воду." in public_response.text
 
 
+def test_admin_cannot_publish_material_with_unredacted_salutation_addressee(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        material = session.query(Material).filter_by(status=MaterialStatus.DRAFT).one()
+        material.original_text = "@brulik0708, Здравствуйте. Управлением транспорта указано."
+        material.public_text = material.original_text
+        session.commit()
+        material_id = material.id
+
+    response = client.post(
+        f"/admin/materials/{material_id}/status",
+        data={"csrf_token": csrf_token, "status": "active"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.DRAFT
+
+
+def test_admin_cannot_publish_material_with_pending_person_name_review(
+    admin_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = admin_app_context
+    csrf_token = login(client)
+    with session_factory() as session:
+        material_id = session.query(Material).filter_by(status=MaterialStatus.NEEDS_REVIEW).one().id
+
+    response = client.post(
+        f"/admin/materials/{material_id}/status",
+        data={"csrf_token": csrf_token, "status": "active"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 400
+    with session_factory() as session:
+        material = session.get(Material, material_id)
+        assert material is not None
+        assert material.status == MaterialStatus.NEEDS_REVIEW
+
+
 def test_admin_post_without_csrf_does_not_change_status_or_add_note(
     admin_app_context: tuple[TestClient, sessionmaker[Session]],
 ) -> None:

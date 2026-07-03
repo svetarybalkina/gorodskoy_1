@@ -6,6 +6,7 @@ from app.services.anonymization import (
     PHONE_REPLACEMENT,
     PROFILE_REPLACEMENT,
     anonymize_text,
+    has_unredacted_salutation_addressee,
 )
 
 
@@ -52,6 +53,49 @@ def test_anonymizer_redacts_personal_profile_links() -> None:
     assert PROFILE_REPLACEMENT in result.text
     assert "vk.com/ivan.petrov" not in result.text
     assert result.redactions[0].redaction_type == "personal_profile"
+
+
+def test_anonymizer_redacts_bare_username_without_touching_email() -> None:
+    result = anonymize_text("Ответ направлен пользователю @brulik0708, email отдела help@example.ru.")
+
+    assert PROFILE_REPLACEMENT in result.text
+    assert "@brulik0708" not in result.text
+    assert "help@example.ru" in result.text
+    assert any(item.redaction_type == "personal_profile" for item in result.redactions)
+
+
+def test_anonymizer_redacts_salutation_addressee_from_screenshot_examples() -> None:
+    samples = [
+        "@brulik0708, Здравствуйте. Управлением транспорта г. Таганрога указано.",
+        "Ni T, Здравствуйте. Решением Таганрогского суда от 01.10.2025.",
+        "ВАЛЕРИЙ, Здравствуйте. В план ухода за зелеными насаждениями включено дерево.",
+        "Ирина, Здравствуйте. Управлением транспорта г. Таганрога руководителю указано.",
+        "  @pnmrvmrg,  Здравствуйте. Ваше обращение учтено.",
+        "Aleksandr, ЗдравствуйтеСотрудники МКУ проводят проверки.",
+        "[ссылка на профиль скрыта], 6Здравствуйте. Спортивная площадка проверена.",
+        "Ирина,\nЗдравствуйте.В связи с аварийными работами водоснабжение понижено.",
+    ]
+
+    for sample in samples:
+        result = anonymize_text(sample)
+
+        assert result.text.startswith("Здравствуйте")
+        assert "Здравствуйте" in result.text
+        assert result.redactions[0].redaction_type == "salutation_addressee"
+        assert result.redactions[0].replacement == ""
+        assert not has_unredacted_salutation_addressee(result.text)
+
+
+def test_salutation_guard_detects_unredacted_prefix() -> None:
+    assert has_unredacted_salutation_addressee("@brulik0708, Здравствуйте. Текст.") is True
+    assert has_unredacted_salutation_addressee("Ирина, Здравствуйте. Текст.") is True
+    assert (
+        has_unredacted_salutation_addressee(
+            "[персональное обращение скрыто], Здравствуйте. Текст."
+        )
+        is False
+    )
+    assert has_unredacted_salutation_addressee("Здравствуйте. Текст.") is False
 
 
 def test_anonymizer_keeps_official_contacts_and_addresses() -> None:

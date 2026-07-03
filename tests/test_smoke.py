@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Generator
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
@@ -71,3 +72,13 @@ def test_bot_is_disabled_without_token(caplog) -> None:
     assert state.enabled is False
     assert "Telegram bot is disabled" in state.reason
     assert "Telegram bot is disabled" in caplog.text
+
+
+def test_action_controls_have_shared_spacing_styles() -> None:
+    css = Path("app/static/styles.css").read_text(encoding="utf-8")
+
+    assert ".action-grid" in css
+    assert ".table-actions" in css
+    assert "gap: 12px;" in css
+    assert "gap: 8px;" in css
+    assert ".search-row button" in css

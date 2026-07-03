@@ -24,11 +24,11 @@ class MaterialReprocessingService:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def reprocess_material(self, material_id: int) -> ReprocessResult | None:
+    def reprocess_material(self, material_id: int, *, reindex: bool = True) -> ReprocessResult | None:
         material = self.session.get(Material, material_id)
         if material is None:
             return None
-        result = self._reprocess(material)
+        result = self._reprocess(material, reindex=reindex)
         self.session.flush()
         return result
 
@@ -48,12 +48,12 @@ class MaterialReprocessingService:
         self.session.flush()
         return totals
 
-    def _reprocess(self, material: Material) -> ReprocessResult:
+    def _reprocess(self, material: Material, *, reindex: bool = True) -> ReprocessResult:
         anonymized = anonymize_text(material.original_text)
         self.session.execute(delete(RedactionEvent).where(RedactionEvent.material_id == material.id))
         self.session.execute(delete(PersonNameReview).where(PersonNameReview.material_id == material.id))
         material.public_text = anonymized.text
-        material.has_personal_data = bool(anonymized.redactions)
+        material.has_personal_data = anonymized.has_personal_data
         material.needs_person_name_review = bool(anonymized.person_names)
         if anonymized.needs_review:
             material.status = MaterialStatus.NEEDS_REVIEW
@@ -76,7 +76,8 @@ class MaterialReprocessingService:
                 detected_name=person_name.detected_name,
                 context=person_name.context,
             )
-        SearchService(self.session).reindex_material(material.id)
+        if reindex:
+            SearchService(self.session).reindex_material(material.id)
         return ReprocessResult(
             processed=1,
             needs_review=1 if anonymized.needs_review else 0,

@@ -42,6 +42,7 @@ from app.db.session import get_db_session
 from app.importers.telegram_json import TelegramImportError, TelegramJsonImporter
 from app.search import SearchService
 from app.search.normalization import normalize_text
+from app.services.anonymization import has_unredacted_salutation_addressee
 from app.services.material_deletion import MaterialDeletionService
 from app.services.person_reviews import PersonNameReviewService
 from app.services.reprocessing import MaterialReprocessingService
@@ -467,6 +468,18 @@ async def update_material_status(
     material = MaterialRepository(db).update_status(material_id, new_status)
     if material is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if new_status == MaterialStatus.ACTIVE:
+        has_pending_person_reviews = any(review.status.value == "pending" for review in material.person_name_reviews)
+        if material.needs_person_name_review or has_pending_person_reviews:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Material has unresolved person name review",
+            )
+        if has_unredacted_salutation_addressee(material.public_text):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Material has unredacted personal salutation addressee",
+            )
     SearchService(db).reindex_material(material_id)
     db.commit()
     return RedirectResponse(f"/admin/materials/{material_id}", status_code=status.HTTP_303_SEE_OTHER)

@@ -10,6 +10,8 @@ APARTMENT_REPLACEMENT = "[квартира скрыта]"
 ADDRESS_REPLACEMENT = "[адрес скрыт]"
 APPEAL_REPLACEMENT = "[номер обращения скрыт]"
 PROFILE_REPLACEMENT = "[ссылка на профиль скрыта]"
+SALUTATION_ADDRESSEE_REPLACEMENT = ""
+OLD_SALUTATION_ADDRESSEE_REPLACEMENT = "[персональное обращение скрыто]"
 
 
 @dataclass(frozen=True)
@@ -80,6 +82,13 @@ PROFILE_URL_PATTERN = re.compile(
     r"[A-Za-z0-9_.-]{3,}(?:/[A-Za-z0-9_.?=&%+-]*)?",
     re.IGNORECASE,
 )
+BARE_USERNAME_PATTERN = re.compile(r"(?<![\w.+-])@[A-Za-z0-9_][A-Za-z0-9_.-]{2,}(?![\w.-])")
+SALUTATION_ADDRESSEE_PATTERN = re.compile(
+    r"^(?P<leading>\s*)"
+    r"(?P<addressee>(?=[\s\S]{1,160}?Здравствуйте)(?=[\s\S]{1,160},)[\s\S]{1,160}?)"
+    r"(?P<greeting>Здравствуйте)",
+    re.IGNORECASE,
+)
 FULL_NAME_PATTERN = re.compile(
     r"\b[А-ЯЁ][а-яё]{2,}\s+[А-ЯЁ][а-яё]{2,}\s+"
     r"[А-ЯЁ][а-яё]{2,}(?:вич|вича|вичем|вичу|вна|вны|вне|вну|вной|ична|ичны|ичне|ичну|ичной)\b"
@@ -112,17 +121,32 @@ def anonymize_text(text: str) -> AnonymizationResult:
     matches: list[RedactionMatch] = []
     review_cases: list[ReviewCase] = []
 
+    salutation_match = SALUTATION_ADDRESSEE_PATTERN.search(text)
+    if salutation_match and not _is_redacted_salutation_addressee(salutation_match.group("addressee")):
+        matches.append(
+            RedactionMatch(
+                redaction_type="salutation_addressee",
+                original_fragment=(salutation_match.group("leading") + salutation_match.group("addressee")).strip(),
+                replacement=SALUTATION_ADDRESSEE_REPLACEMENT,
+                start=salutation_match.start("leading"),
+                end=salutation_match.end("addressee"),
+            )
+        )
+
     for pattern, redaction_type, replacement in (
         (ADDRESS_PATTERN, "address", ADDRESS_REPLACEMENT),
         (APARTMENT_PATTERN, "apartment", APARTMENT_REPLACEMENT),
         (APPEAL_PATTERN, "appeal_number", APPEAL_REPLACEMENT),
         (PROFILE_URL_PATTERN, "personal_profile", PROFILE_REPLACEMENT),
+        (BARE_USERNAME_PATTERN, "personal_profile", PROFILE_REPLACEMENT),
         (EMAIL_PATTERN, "email", EMAIL_REPLACEMENT),
         (PHONE_PATTERN, "phone", PHONE_REPLACEMENT),
     ):
         for match in pattern.finditer(text):
             original = match.group(0)
             if _has_official_context(text, match.start(), match.end()):
+                continue
+            if any(match.start() < item.end and match.end() > item.start for item in matches):
                 continue
             needs_review = redaction_type in {"phone", "email", "address", "personal_profile"} and not _has_private_context(
                 text, match.start(), match.end()
@@ -156,6 +180,13 @@ def anonymize_text(text: str) -> AnonymizationResult:
         person_names=person_names,
         review_cases=_unique_review_cases(review_cases),
     )
+
+
+def has_unredacted_salutation_addressee(text: str) -> bool:
+    match = SALUTATION_ADDRESSEE_PATTERN.search(text)
+    if match is None:
+        return False
+    return not _is_redacted_salutation_addressee(match.group("addressee"))
 
 
 def _drop_overlapping(matches: list[RedactionMatch]) -> list[RedactionMatch]:
@@ -194,6 +225,11 @@ def _find_person_names(text: str) -> list[PersonNameCandidate]:
                 )
             )
     return candidates
+
+
+def _is_redacted_salutation_addressee(value: str) -> bool:
+    normalized = re.sub(r"[\s,!?).]+$", "", value.strip())
+    return normalized == OLD_SALUTATION_ADDRESSEE_REPLACEMENT
 
 
 def _has_official_context(text: str, start: int, end: int) -> bool:

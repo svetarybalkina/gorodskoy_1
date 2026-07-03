@@ -75,7 +75,7 @@
                             <span>{{ "подтверждено автоматически" if event.is_confirmed else "требует проверки" }}</span>
                         </div>
                         <p><strong>Скрыто:</strong> {{ event.original_fragment }}</p>
-                        <p><strong>Замена:</strong> {{ event.replacement }}</p>
+                        <p><strong>Замена:</strong> {{ event.replacement if event.replacement else "удалено" }}</p>
                     </article>
                 {% endfor %}
             </div>

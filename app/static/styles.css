@@ -36,7 +36,7 @@ a:hover {
 .site-footer {
     max-width: 1120px;
     margin: 0 auto;
-    padding: 20px 24px;
+    padding: 14px 24px;
 }
 
 .site-header {
@@ -56,13 +56,14 @@ a:hover {
 .legal-links {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
+    gap: 8px 14px;
+    align-items: center;
 }
 
 .page {
     max-width: 1120px;
     margin: 0 auto;
-    padding: 28px 24px 56px;
+    padding: 22px 24px 56px;
 }
 
 .intro {
@@ -172,6 +173,10 @@ button,
     font: inherit;
     font-weight: 700;
     cursor: pointer;
+}
+
+form {
+    margin: 0;
 }
 
 button:disabled {
@@ -304,10 +309,6 @@ button:disabled {
     max-width: 1200px;
 }
 
-.admin-header .inline-form {
-    margin: 0;
-}
-
 .link-button {
     min-height: auto;
     padding: 0;
@@ -400,19 +401,13 @@ button:disabled {
 
 .table-actions {
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: 8px;
 }
 
-.table-actions .inline-form {
-    margin: 0;
-}
-
 .table-actions button {
-    width: 100%;
     min-height: 36px;
-    margin: 0;
     padding: 8px 14px;
     white-space: nowrap;
 }
@@ -482,7 +477,25 @@ button:disabled {
 .action-grid {
     display: flex;
     flex-wrap: wrap;
-    gap: 10px;
+    gap: 12px;
+    align-items: flex-start;
+}
+
+.action-grid + .admin-form,
+.admin-form + .admin-form,
+.filter-form + .admin-table-wrap,
+.filter-form + .muted {
+    margin-top: 16px;
+}
+
+.action-grid .admin-form,
+.action-grid .inline-form {
+    display: inline-flex;
+    max-width: none;
+}
+
+.action-grid button {
+    margin: 0;
 }
 
 .admin-texts {
@@ -517,9 +530,22 @@ button:disabled {
         margin-top: 18px;
     }
 
-    button {
+    .search-row button {
         width: 100%;
         margin-top: 10px;
+    }
+
+    .action-grid,
+    .table-actions {
+        flex-direction: column;
+    }
+
+    .action-grid button,
+    .action-grid .admin-form,
+    .table-actions button,
+    .table-actions .inline-form,
+    .read-more {
+        width: 100%;
     }
 
     .topic-grid,

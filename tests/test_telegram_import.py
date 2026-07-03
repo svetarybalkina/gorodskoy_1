@@ -371,6 +371,50 @@ def test_importer_redacts_personal_data_and_keeps_original_text(
     assert report.summary["needs_review_count"] == 1
 
 
+def test_importer_redacts_salutation_addressee_before_saving_public_text(
+    session: Session,
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        AUTO_DB_BOOTSTRAP=False,
+        OFFICIAL_TELEGRAM_SOURCE_ID="official_channel_1",
+        OFFICIAL_TELEGRAM_SOURCE_NAME="Администрация",
+        OFFICIAL_TELEGRAM_SOURCE_KIND="official_channel",
+    )
+    original_text = "@brulik0708, Здравствуйте. Управлением транспорта г. Таганрога указано."
+
+    TelegramJsonImporter(
+        session=session,
+        settings=settings,
+        imports_dir=tmp_path / "imports",
+        exports_dir=tmp_path / "exports",
+    ).import_bytes(
+        filename="result.json",
+        content=telegram_export(
+            [
+                {
+                    "id": 21,
+                    "type": "message",
+                    "date": "2026-06-20T10:00:00",
+                    "from_id": "official_channel_1",
+                    "text": original_text,
+                }
+            ]
+        ),
+    )
+    session.commit()
+
+    material = session.query(Material).one()
+    event = session.query(RedactionEvent).one()
+
+    assert material.original_text == original_text
+    assert material.public_text.startswith("Здравствуйте")
+    assert "@brulik0708" not in material.public_text
+    assert event.redaction_type == "salutation_addressee"
+    assert event.original_fragment == "@brulik0708,"
+    assert event.replacement == ""
+
+
 @pytest.fixture()
 def admin_import_app_context(
     tmp_path: Path,
