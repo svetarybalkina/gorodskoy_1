@@ -137,10 +137,10 @@ def _category_slug(*, raw: str, terms: set[str]) -> str | None:
         return "bills"
     if terms & {"подъезд", "лифт", "домофон"}:
         return "entrance"
-    if terms & {"двор", "территория", "площадка"}:
-        return "yard"
     if terms & {"собака", "животное", "отлов"}:
         return "animals"
+    if terms & {"двор", "территория", "площадка"}:
+        return "yard"
     return None
 
 

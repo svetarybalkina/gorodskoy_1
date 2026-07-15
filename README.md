@@ -194,6 +194,24 @@ docker compose run --rm app python scripts/rebuild_question_links.py --batch-id 
 docker compose run --rm app python scripts/rebuild_question_links.py --batch-id 2 --export-path imports/f45cc6e1426d4ae5af806fb29a654d6d_result.json --execute
 ```
 
+## Анализ качества поиска на бытовых запросах
+
+Для задачи системной доработки релевантности поиска добавлен внутренний CLI-отчет, который не меняет базу и помогает собрать воспроизводимый корпус проблемных формулировок из `problem_queries`, частых `resident_questions` и контрольных ручных запросов.
+
+Быстрый запуск:
+
+```bash
+docker compose run --rm app python scripts/analyze_search_quality.py
+```
+
+Пример с ограничением объема выборки:
+
+```bash
+docker compose run --rm app python scripts/analyze_search_quality.py --problem-limit 10 --resident-limit 10
+```
+
+Отчет раскладывает запросы по классам ошибок ранжирования, включая слабые однословные совпадения, общий бытовой контекст, недооцененные устойчивые фразы, слабый вклад связанных вопросов жителей и перекос между официальным текстом, рекомендациями и вопросами.
+
 Файлы `.env`, базы данных, JSON-выгрузки, экспорты и логи исключены из Git.
 
 Реальные выгрузки Telegram с персональными данными нельзя хранить в репозитории. Для ручной загрузки используйте папку вне проекта, например `C:\Projects\gorodskoy_private\telegram_exports`, или временно кладите файл в `imports/`, который исключен из Git и Docker build context.

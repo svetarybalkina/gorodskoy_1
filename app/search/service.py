@@ -29,6 +29,32 @@ from app.services.recommendations import MIN_CONFIDENCE_FOR_PUBLIC, Recommendati
 
 MATCH_LEVELS = {"high", "medium", "low", "none", "not_helpful"}
 SNIPPET_LENGTH = 320
+STATE_PATTERNS: dict[str, tuple[str, ...]] = {
+    "maintenance_condition": ("гряз", "уборк", "неубран", "санитар", "мусор", "воняет", "запах"),
+    "surface_clearing": ("очист", "убрат", "подмест", "помы", "мыть"),
+    "weather_access": ("снег", "налед", "гололед", "сугроб", "противогололед", "подсып"),
+    "temperature_comfort": ("температур", "холод", "жарк", "отоплен", "батаре"),
+    "repair_work": ("ремонт", "почин", "неисправ", "сломан", "замен", "восстанов"),
+    "service_outage": ("отключ", "отсутств", "нет ", "не работает", "порыв", "утеч"),
+    "complaint_control": ("жалоб", "бездейств", "претенз", "нарушен", "не реагир"),
+    "schedule_information": ("график", "когда", "срок", "ознаком", "планиру", "будет"),
+    "danger_emergency": ("авар", "срочн", "опасн", "агрессивн"),
+}
+ORTHOGONAL_STATE_PENALTY = 0.45
+RELATED_STATE_ALIGNMENT: dict[tuple[str, str], float] = {
+    ("maintenance_condition", "surface_clearing"): 0.45,
+    ("surface_clearing", "maintenance_condition"): 0.6,
+    ("service_outage", "repair_work"): 0.35,
+    ("repair_work", "service_outage"): 0.35,
+}
+GENERIC_RESPONSE_PATTERNS = (
+    "направлен специалист",
+    "направлено специалист",
+    "вернемся с ответ",
+    "для детальной проработки",
+    "для предоставления информации",
+    "уточните адресный ориентир",
+)
 
 
 @dataclass(frozen=True)
@@ -36,6 +62,24 @@ class SearchItem:
     material: Material
     score: float
     snippet: str
+    signals: SearchSignals
+
+
+@dataclass(frozen=True)
+class SearchSignals:
+    public_overlap: float
+    question_overlap: float
+    recommendation_overlap: float
+    phrase_overlap: float
+    strict_question_match: bool
+    state_alignment: float
+    category_alignment: float
+    category_evidence: float
+    state_penalty: float
+    generic_penalty: float
+    need_multiplier: float
+    weak_signal_only: bool
+    final_score: float
 
 
 @dataclass(frozen=True)
@@ -99,6 +143,21 @@ class SearchService:
                         material=material,
                         score=0.0,
                         snippet=self._snippet_for_material(material, normalized_query=snippet_query),
+                        signals=SearchSignals(
+                            public_overlap=0.0,
+                            question_overlap=0.0,
+                            recommendation_overlap=0.0,
+                            phrase_overlap=0.0,
+                            strict_question_match=False,
+                            state_alignment=0.0,
+                            category_alignment=0.0,
+                            category_evidence=1.0 if selected_category is None else float(self._has_category_evidence(material, selected_category)),
+                            state_penalty=1.0,
+                            generic_penalty=1.0,
+                            need_multiplier=1.0,
+                            weak_signal_only=False,
+                            final_score=0.0,
+                        ),
                     )
                     for material in materials
                 ],
@@ -111,6 +170,7 @@ class SearchService:
 
         rows = self._fts_rows(
             normalized_query,
+            raw_query=query,
             query_need=query_need,
             category_ids=category_ids,
             selected_category=selected_category,
@@ -120,6 +180,7 @@ class SearchService:
             self.rebuild_index()
             rows = self._fts_rows(
                 normalized_query,
+                raw_query=query,
                 query_need=query_need,
                 category_ids=category_ids,
                 selected_category=selected_category,
@@ -135,6 +196,7 @@ class SearchService:
                     materials_by_id[material_id],
                     normalized_query=normalized_query,
                 ),
+                signals=row["signals"],
             )
             for row, material_id in zip(rows, material_ids, strict=False)
             if material_id in materials_by_id
@@ -176,7 +238,7 @@ class SearchService:
                 selectinload(Material.topic),
                 selectinload(Material.category),
                 selectinload(Material.variants),
-                selectinload(Material.question_links),
+                selectinload(Material.question_links).selectinload(MaterialLink.question),
             )
         )
         if material is None or not self._is_public_searchable(material):
@@ -203,7 +265,7 @@ class SearchService:
                 selectinload(Material.topic),
                 selectinload(Material.category),
                 selectinload(Material.variants),
-                selectinload(Material.question_links),
+                selectinload(Material.question_links).selectinload(MaterialLink.question),
             )
         )
         for material in materials:
@@ -358,7 +420,7 @@ class SearchService:
                 )
             )
         )
-        linked_questions_text = self._linked_questions_text(material.id)
+        linked_questions_text = self._linked_questions_text(material)
         normalized_text = normalize_text(
             " ".join(
                 [
@@ -392,6 +454,7 @@ class SearchService:
         self,
         normalized_query: str,
         *,
+        raw_query: str,
         query_need: QueryNeed,
         category_ids: list[int] | None,
         selected_category: Category | None,
@@ -418,6 +481,8 @@ class SearchService:
         materials = self._load_materials(material_ids)
         filtered_rows: list[dict[str, object]] = []
         query_terms = set(query_tokens)
+        query_phrases = self._query_phrases(query_tokens)
+        query_states = self._extract_states(raw_query)
         for material_id in material_ids:
             material = materials.get(material_id)
             if material is None:
@@ -426,31 +491,25 @@ class SearchService:
                 continue
             if selected_category is not None and not self._has_category_evidence(material, selected_category):
                 continue
-            indexed_text = normalize_text(
-                " ".join(
-                    [
-                        material.public_text,
-                        material.topic.name,
-                        material.category.name if material.category else "",
-                        " ".join(
-                            recommendation.normalized_text
-                            for recommendation in material.recommendations
-                            if recommendation.confidence >= MIN_CONFIDENCE_FOR_PUBLIC
-                        ),
-                        self._linked_questions_text(material.id),
-                    ]
-                )
+            signals = self._score_material(
+                material=material,
+                raw_query=raw_query,
+                query_terms=query_terms,
+                query_phrases=query_phrases,
+                query_states=query_states,
+                query_need=query_need,
             )
-            overlap = len(query_terms & set(indexed_text.split()))
-            recommendation_overlap = self._recommendation_overlap(material, query_terms, query_need)
-            question_overlap = len(query_terms & set(self._linked_questions_text(material.id).split()))
-            score = (overlap + recommendation_overlap + question_overlap * 2.0) / max(len(query_terms), 1)
-            if query_need.category_slug is not None and material.category is not None:
-                if material.category.slug == query_need.category_slug:
-                    score += 0.25
-            score *= self._material_need_multiplier(material, query_need)
-            filtered_rows.append({"material_id": material_id, "score": score})
-        filtered_rows.sort(key=lambda row: (-float(row["score"]), material_ids.index(int(row["material_id"]))))
+            filtered_rows.append({"material_id": material_id, "score": signals.final_score, "signals": signals})
+        filtered_rows.sort(
+            key=lambda row: (
+                -float(row["score"]),
+                -row["signals"].question_overlap,
+                -row["signals"].state_alignment,
+                -row["signals"].phrase_overlap,
+                -row["signals"].public_overlap,
+                material_ids.index(int(row["material_id"])),
+            )
+        )
         return filtered_rows[:limit]
 
     def _load_materials(self, material_ids: list[int]) -> dict[int, Material]:
@@ -542,10 +601,37 @@ class SearchService:
     def _match_level(self, *, items: list[SearchItem], normalized_query: str) -> str:
         if not items:
             return "none"
-        best_score = items[0].score
-        if best_score >= 0.75:
+        best = items[0]
+        best_signals = best.signals
+        query_term_count = len(tokens(normalized_query))
+        if best_signals.weak_signal_only:
+            return "low"
+        if query_term_count <= 1:
+            if best.score >= 0.55 and max(best_signals.public_overlap, best_signals.question_overlap) >= 1.0:
+                return "high"
+            if best.score >= 0.3:
+                return "medium"
+            return "low"
+        if best_signals.strict_question_match and best.score >= 0.5:
             return "high"
-        if best_score >= 0.4:
+        if (
+            best.score >= 0.85
+            and best_signals.public_overlap >= 0.45
+            and max(
+                best_signals.phrase_overlap,
+                best_signals.question_overlap,
+                best_signals.recommendation_overlap,
+            )
+            >= 0.35
+        ):
+            return "high"
+        if best.score >= 0.2 and max(
+            best_signals.public_overlap,
+            best_signals.question_overlap,
+            best_signals.recommendation_overlap,
+            best_signals.state_alignment,
+            best_signals.category_alignment,
+        ) >= 0.25:
             return "medium"
         return "low"
 
@@ -710,6 +796,7 @@ class SearchService:
         if not items or not normalized_query:
             return []
         query_terms = set(tokens(normalized_query))
+        query_states = self._extract_states(normalized_query)
         if not query_terms:
             return []
         results: list[RecommendationSearchItem] = []
@@ -723,10 +810,19 @@ class SearchService:
                 overlap = len(query_terms & recommendation_terms)
                 if overlap == 0:
                     continue
+                recommendation_states = self._extract_states(" ".join([recommendation.text, recommendation.normalized_text]))
+                state_alignment, state_penalty = self._state_alignment(
+                    query_states=query_states,
+                    material_states=recommendation_states,
+                )
+                if query_states and state_alignment == 0.0:
+                    continue
                 score = (overlap / max(len(query_terms), 1)) * action_score_multiplier(
                     query_need,
                     recommendation.action_kind,
                 )
+                score *= state_alignment if state_alignment > 0.0 else 1.0
+                score *= state_penalty
                 results.append(
                     RecommendationSearchItem(
                         recommendation=recommendation,
@@ -749,7 +845,7 @@ class SearchService:
         for recommendation in material.recommendations:
             if recommendation.confidence < MIN_CONFIDENCE_FOR_PUBLIC:
                 continue
-            overlap = len(query_terms & set(tokens(recommendation.normalized_text)))
+            overlap = self._overlap_ratio(query_terms, set(tokens(recommendation.normalized_text)))
             weighted = overlap * action_score_multiplier(query_need, recommendation.action_kind)
             best_overlap = max(best_overlap, weighted)
         return best_overlap
@@ -764,15 +860,201 @@ class SearchService:
             return 0.3
         return 0.7
 
-    def _linked_questions_text(self, material_id: int) -> str:
-        from app.db.models import MaterialLink, ResidentQuestion
-
-        questions = self.session.scalars(
-            select(ResidentQuestion.normalized_text)
-            .join(MaterialLink, MaterialLink.question_id == ResidentQuestion.id)
-            .where(MaterialLink.material_id == material_id)
+    def _linked_questions_text(self, material: Material) -> str:
+        return " ".join(
+            question.normalized_text
+            for link in material.question_links
+            if (question := link.question) is not None and question.normalized_text
         )
-        return " ".join(question for question in questions if question)
+
+    def _material_recommendation_text(self, material: Material) -> str:
+        return " ".join(
+            recommendation.normalized_text
+            for recommendation in material.recommendations
+            if recommendation.confidence >= MIN_CONFIDENCE_FOR_PUBLIC
+        )
+
+    def _score_material(
+        self,
+        *,
+        material: Material,
+        raw_query: str,
+        query_terms: set[str],
+        query_phrases: set[str],
+        query_states: dict[str, int],
+        query_need: QueryNeed,
+    ) -> SearchSignals:
+        public_terms = set(tokens(material.public_text))
+        question_text = self._linked_questions_text(material)
+        question_terms = set(question_text.split())
+        recommendation_text = self._material_recommendation_text(material)
+        strict_question_match = self._material_has_human_question_match(material, raw_query)
+        material_states = self._extract_states(" ".join([material.public_text, recommendation_text, question_text]))
+
+        public_overlap = self._overlap_ratio(query_terms, public_terms)
+        question_overlap = self._overlap_ratio(query_terms, question_terms)
+        recommendation_overlap = self._recommendation_overlap(material, query_terms, query_need)
+        phrase_overlap = self._phrase_overlap(
+            query_phrases=query_phrases,
+            haystacks=(
+                normalize_text(material.public_text),
+                question_text,
+                recommendation_text,
+            ),
+        )
+        state_alignment, state_penalty = self._state_alignment(
+            query_states=query_states,
+            material_states=material_states,
+        )
+        category_alignment = self._category_alignment(material, query_need)
+        category_evidence = self._category_evidence_score(material, query_need)
+        generic_penalty = self._generic_penalty(material, public_overlap, phrase_overlap, question_overlap)
+        need_multiplier = self._material_need_multiplier(material, query_need)
+        weak_signal_only = (
+            public_overlap <= 0.34
+            and question_overlap == 0.0
+            and recommendation_overlap == 0.0
+            and phrase_overlap == 0.0
+        )
+        base_score = (
+            public_overlap * 0.45
+            + question_overlap * 0.35
+            + recommendation_overlap * 0.2
+            + phrase_overlap * 0.25
+            + (0.45 if strict_question_match else 0.0)
+            + state_alignment * 0.35
+            + category_alignment * 0.12
+            + category_evidence * 0.12
+        )
+        final_score = max(base_score * state_penalty * generic_penalty * need_multiplier, 0.0)
+        if weak_signal_only and category_alignment == 0.0:
+            final_score *= 0.6
+        return SearchSignals(
+            public_overlap=public_overlap,
+            question_overlap=question_overlap,
+            recommendation_overlap=recommendation_overlap,
+            phrase_overlap=phrase_overlap,
+            strict_question_match=strict_question_match,
+            state_alignment=state_alignment,
+            category_alignment=category_alignment,
+            category_evidence=category_evidence,
+            state_penalty=state_penalty,
+            generic_penalty=generic_penalty,
+            need_multiplier=need_multiplier,
+            weak_signal_only=weak_signal_only,
+            final_score=final_score,
+        )
+
+    def _overlap_ratio(self, query_terms: set[str], material_terms: set[str]) -> float:
+        if not query_terms or not material_terms:
+            return 0.0
+        return len(query_terms & material_terms) / len(query_terms)
+
+    def _query_phrases(self, query_tokens: list[str]) -> set[str]:
+        phrases: set[str] = set()
+        for size in (2, 3):
+            if len(query_tokens) < size:
+                continue
+            for index in range(len(query_tokens) - size + 1):
+                phrases.add(" ".join(query_tokens[index : index + size]))
+        return phrases
+
+    def _extract_states(self, text_value: str) -> dict[str, int]:
+        lowered = f" {text_value.lower().replace('ё', 'е')} "
+        states: dict[str, int] = {}
+        for state, patterns in STATE_PATTERNS.items():
+            hits = sum(lowered.count(pattern) for pattern in patterns)
+            if hits > 0:
+                states[state] = hits
+        return states
+
+    def _state_alignment(
+        self,
+        *,
+        query_states: dict[str, int],
+        material_states: dict[str, int],
+    ) -> tuple[float, float]:
+        if not query_states:
+            return 0.0, 1.0
+        matched_scores = [
+            min(1.0, material_states[state] / max(query_states[state], 1))
+            for state in query_states
+            if state in material_states
+        ]
+        related_scores = [
+            RELATED_STATE_ALIGNMENT[(query_state, material_state)]
+            for query_state in query_states
+            for material_state in material_states
+            if (query_state, material_state) in RELATED_STATE_ALIGNMENT
+        ]
+        alignment = max([*matched_scores, *related_scores], default=0.0)
+        penalty = 1.0
+        if matched_scores:
+            return alignment, penalty
+        if alignment == 0.0:
+            penalty *= ORTHOGONAL_STATE_PENALTY if material_states else 0.7
+        elif related_scores and any(state == "weather_access" for state in material_states):
+            penalty *= 0.75
+        return alignment, penalty
+
+    def _phrase_overlap(self, *, query_phrases: set[str], haystacks: tuple[str, ...]) -> float:
+        if not query_phrases:
+            return 0.0
+        matched = 0
+        for phrase in query_phrases:
+            if any(phrase in haystack for haystack in haystacks if haystack):
+                matched += 1
+        return matched / len(query_phrases)
+
+    def _category_alignment(self, material: Material, query_need: QueryNeed) -> float:
+        if query_need.category_slug is None or material.category is None:
+            return 0.0
+        if material.category.slug == query_need.category_slug:
+            return 1.0
+        if query_need.category_slug == "animals" and material.category.slug in {"stray_dogs", "animal_capture", "aggressive_animals", "shelters", "pet_rules"}:
+            return 0.9
+        return 0.0
+
+    def _category_evidence_score(self, material: Material, query_need: QueryNeed) -> float:
+        if query_need.category_slug is None:
+            return 0.0
+        category_terms = REQUIRED_MARKERS.get(query_need.category_slug, set())
+        if not category_terms:
+            return 0.0
+        material_terms = set(tokens(material.public_text))
+        if material.category is not None and material.category.slug == query_need.category_slug and category_terms & material_terms:
+            return 1.0
+        if category_terms & material_terms:
+            return 0.6
+        return 0.0
+
+    def _material_has_human_question_match(self, material: Material, query: str) -> bool:
+        exact_query = self._strict_query_text(query)
+        if not exact_query:
+            return False
+        for link in material.question_links:
+            question = link.question
+            if question is None:
+                continue
+            if self._queries_match_humanly(self._strict_query_text(question.anonymized_text), exact_query):
+                return True
+        return False
+
+    def _generic_penalty(
+        self,
+        material: Material,
+        public_overlap: float,
+        phrase_overlap: float,
+        question_overlap: float,
+    ) -> float:
+        normalized_public = normalize_text(material.public_text)
+        if any(pattern in normalized_public for pattern in GENERIC_RESPONSE_PATTERNS):
+            if max(public_overlap, phrase_overlap, question_overlap) < 0.5:
+                return 0.35
+            return 0.6
+        if material.category is not None and material.category.slug == "other" and max(public_overlap, phrase_overlap, question_overlap) < 0.75:
+            return 0.45
+        return 1.0
 
     def _reindex_category(self, category_id: int) -> None:
         material_ids = self.session.scalars(
