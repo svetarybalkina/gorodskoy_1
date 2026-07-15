@@ -14,7 +14,7 @@ from app.db.enums import (
     ProblemQueryAction,
     ProblemQueryChannel,
 )
-from app.db.models import Category, DictionaryCandidate, Material, MaterialRecommendation, QuestionVariant, Topic
+from app.db.models import Category, DictionaryCandidate, Material, MaterialLink, MaterialRecommendation, QuestionVariant, Topic
 from app.db.repositories import (
     DictionaryCandidateRepository,
     ProblemQueryRepository,
@@ -51,6 +51,7 @@ class SearchResponse:
     recommendations: list[RecommendationSearchItem]
     match_level: str
     normalized_query: str
+    has_strict_question_match: bool = False
     problem_query_saved: bool = False
 
     @property
@@ -104,6 +105,7 @@ class SearchService:
                 recommendations=[],
                 match_level="none" if not materials else "medium",
                 normalized_query="",
+                has_strict_question_match=False,
                 problem_query_saved=False,
             )
 
@@ -138,6 +140,7 @@ class SearchService:
             if material_id in materials_by_id
         ]
         match_level = self._match_level(items=items, normalized_query=normalized_query)
+        has_strict_question_match = self._has_strict_question_match(query=query, items=items)
         recommendations = self._recommendations_for_items(
             items=items,
             normalized_query=normalized_query,
@@ -159,6 +162,7 @@ class SearchService:
             recommendations=recommendations,
             match_level=match_level,
             normalized_query=normalized_query,
+            has_strict_question_match=has_strict_question_match,
             problem_query_saved=problem_query_saved,
         )
 
@@ -460,7 +464,7 @@ class SearchService:
                 selectinload(Material.topic),
                 selectinload(Material.category).selectinload(Category.topic),
                 selectinload(Material.recommendations),
-                selectinload(Material.question_links),
+                selectinload(Material.question_links).selectinload(MaterialLink.question),
             )
         )
         material_map = {material.id: material for material in materials if self._is_public_searchable(material)}
@@ -480,7 +484,7 @@ class SearchService:
                 selectinload(Material.topic),
                 selectinload(Material.category).selectinload(Category.topic),
                 selectinload(Material.recommendations),
-                selectinload(Material.question_links),
+                selectinload(Material.question_links).selectinload(MaterialLink.question),
             )
             .order_by(Material.published_at.desc(), Material.id.desc())
             .limit(limit)
@@ -544,6 +548,65 @@ class SearchService:
         if best_score >= 0.4:
             return "medium"
         return "low"
+
+    def _has_strict_question_match(self, *, query: str, items: list[SearchItem]) -> bool:
+        exact_query = self._strict_query_text(query)
+        if not exact_query:
+            return False
+        for item in items:
+            for link in item.material.question_links:
+                question = link.question
+                if question is None:
+                    continue
+                if self._queries_match_humanly(self._strict_query_text(question.anonymized_text), exact_query):
+                    return True
+        return False
+
+    def _strict_query_text(self, text_value: str) -> str:
+        compact = re.sub(r"[^\w\s]", " ", text_value.lower().replace("ё", "е"), flags=re.UNICODE)
+        return " ".join(compact.split())
+
+    def _queries_match_humanly(self, left: str, right: str) -> bool:
+        if left == right:
+            return True
+        left_tokens = left.split()
+        right_tokens = right.split()
+        if len(left_tokens) != len(right_tokens):
+            return False
+
+        typo_tokens = 0
+        total_distance = 0
+        for left_token, right_token in zip(left_tokens, right_tokens, strict=False):
+            if left_token == right_token:
+                continue
+            distance = self._levenshtein_distance(left_token, right_token)
+            max_distance = 1 if max(len(left_token), len(right_token)) <= 4 else 2
+            if distance > max_distance:
+                return False
+            typo_tokens += 1
+            total_distance += distance
+
+        if typo_tokens == 0:
+            return True
+        return typo_tokens <= 2 and total_distance <= 3
+
+    def _levenshtein_distance(self, left: str, right: str) -> int:
+        if left == right:
+            return 0
+        if not left:
+            return len(right)
+        if not right:
+            return len(left)
+        previous = list(range(len(right) + 1))
+        for left_index, left_char in enumerate(left, start=1):
+            current = [left_index]
+            for right_index, right_char in enumerate(right, start=1):
+                insertion = current[right_index - 1] + 1
+                deletion = previous[right_index] + 1
+                substitution = previous[right_index - 1] + (left_char != right_char)
+                current.append(min(insertion, deletion, substitution))
+            previous = current
+        return previous[-1]
 
     def _snippet_for_material(self, material: Material, *, normalized_query: str) -> str:
         text_value = material.public_text.strip()

@@ -27,9 +27,8 @@
 
 <section class="section">
     {% if materials %}
-        <p class="result-note">Мы нашли официальные материалы на похожий запрос.</p>
-        {% if match_level in ["medium", "low"] %}
-            <div class="notice">Совпадение может быть неточным. Проверьте дату, источник и официальный текст материала.</div>
+        {% if not has_strict_question_match %}
+            <p class="result-note">Точно таких же вопросов в чате официального телеграмм-канала мэра не найдено, но мы нашли официальные материалы ответов на похожие вопросы:</p>
         {% endif %}
         {% if recommendations %}
             <section class="recommendation-block" aria-labelledby="recommendations-title">

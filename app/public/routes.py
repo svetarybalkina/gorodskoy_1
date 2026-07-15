@@ -286,6 +286,7 @@ async def search(
             "materials": search_response.materials,
             "recommendations": search_response.recommendations,
             "match_level": search_response.match_level,
+            "has_strict_question_match": search_response.has_strict_question_match,
             "problem_query_saved": search_response.problem_query_saved,
         },
     )

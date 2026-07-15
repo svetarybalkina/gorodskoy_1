@@ -9,13 +9,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.db.base import Base
-from app.db.enums import MaterialStatus, MaterialType, SourceKind
-from app.db.models import AdminNote, DictionaryCandidate, Material, ProblemQuery
+from app.db.enums import LinkReason, MaterialStatus, MaterialType, SourceKind
+from app.db.models import AdminNote, DictionaryCandidate, Material, MaterialLink, ProblemQuery, ResidentQuestion
 from app.db.repositories import MaterialRepository, SourceRepository, TaxonomyRepository
 from app.db.seed import seed_initial_data
 from app.db.session import create_database_engine, get_db_session
 from app.main import create_app
 from app.public.routes import SAFE_PROBLEM_QUERY_TEXT
+from app.search.service import SearchService
 
 
 @pytest.fixture()
@@ -279,6 +280,100 @@ def test_search_page_shows_extracted_recommendations_above_materials(
     assert "Сервис не формирует официальный ответ администрации" in response.text
     assert "При отсутствии горячей воды обратитесь в аварийную службу управляющей компании." in response.text
     assert response.text.index("Что указано в найденных материалах") < response.text.index("Официальная публикация")
+
+
+def test_search_page_shows_similar_results_phrase_when_exact_question_was_not_found(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    phrase = "Точно таких же вопросов в чате официального телеграмм-канала мэра не найдено, но мы нашли официальные материалы ответов на похожие вопросы:"
+
+    with session_factory() as session:
+        response = SearchService(session).search_public("отопление", record_problem_query=False)
+        assert response.match_level == "high"
+        assert response.has_strict_question_match is False
+
+    page = client.get("/search?q=отопление")
+
+    assert page.status_code == 200
+    assert phrase in page.text
+
+
+def test_search_page_shows_similar_results_phrase_for_medium_and_low_match(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    phrase = "Точно таких же вопросов в чате официального телеграмм-канала мэра не найдено, но мы нашли официальные материалы ответов на похожие вопросы:"
+
+    with session_factory() as session:
+        taxonomy = TaxonomyRepository(session)
+        housing = taxonomy.get_topic_by_slug("housing")
+        water = taxonomy.get_category(topic_id=housing.id, slug="water") if housing is not None else None
+        assert housing is not None
+        assert water is not None
+        source = session.query(Material).first().source
+        MaterialRepository(session).create(
+            source_id=source.id,
+            topic_id=housing.id,
+            category_id=water.id,
+            material_type=MaterialType.OFFICIAL_ANSWER,
+            status=MaterialStatus.ACTIVE,
+            published_at=datetime(2026, 2, 3, tzinfo=UTC),
+            original_text="Гидропорыв устранен аварийной службой водоканала.",
+            public_text="Гидропорыв устранен аварийной службой водоканала.",
+        )
+        session.commit()
+
+        search_service = SearchService(session)
+        search_service.rebuild_index()
+        medium = search_service.search_public("гидропорыв земля", record_problem_query=False)
+        low = search_service.search_public("гидропорыв земля срочно", record_problem_query=False)
+        assert medium.match_level == "medium"
+        assert low.match_level == "low"
+
+    medium_page = client.get("/search?q=гидропорыв%20земля")
+    low_page = client.get("/search?q=гидропорыв%20земля%20срочно")
+
+    assert medium_page.status_code == 200
+    assert low_page.status_code == 200
+    assert phrase in medium_page.text
+    assert phrase in low_page.text
+
+
+def test_search_page_hides_similar_results_phrase_for_human_exact_question_match(
+    public_app_context: tuple[TestClient, sessionmaker[Session]],
+) -> None:
+    client, session_factory = public_app_context
+    phrase = "Точно таких же вопросов в чате официального телеграмм-канала мэра не найдено, но мы нашли официальные материалы ответов на похожие вопросы:"
+
+    with session_factory() as session:
+        material = session.query(Material).filter(Material.public_text.like("%Отопление восстановят%")).one()
+        question = ResidentQuestion(
+            category_id=material.category_id,
+            anonymized_text="я сделал ошибку",
+            normalized_text="сделать ошибка",
+            source_channel="official-chat",
+        )
+        session.add(question)
+        session.flush()
+        session.add(
+            MaterialLink(
+                question_id=question.id,
+                material_id=material.id,
+                reason=LinkReason.IMPORTED_PAIR,
+                confidence=100,
+            )
+        )
+        session.commit()
+
+        response = SearchService(session).search_public("Я слелал ошибку!", record_problem_query=False)
+        assert response.match_level == "high"
+        assert response.has_strict_question_match is True
+
+    page = client.get("/search?q=%D0%AF%20%D1%81%D0%BB%D0%B5%D0%BB%D0%B0%D0%BB%20%D0%BE%D1%88%D0%B8%D0%B1%D0%BA%D1%83!")
+
+    assert page.status_code == 200
+    assert phrase not in page.text
 
 
 def test_animals_filter_collapses_legacy_detailed_animal_categories(
